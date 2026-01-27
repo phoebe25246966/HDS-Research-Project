@@ -1,0 +1,381 @@
+---
+title: Joint Models of Longitudinal Outcomes and Time-to-Event Data
+
+author:
+  - name: Phoebe Wong Hui Lei 
+  - name: Anushka Muley
+    affil: 1
+affiliation:
+  - num: 1
+    address: School of Mathematical and Statistical Sciences, University of Galway
+logoleft_name: https&#58;//sport.universityofgalway.ie/assets/img/logo2.png
+
+poster_height: "594mm"
+poster_width: "841mm"
+column_numbers: 5
+column_margins: "0.5in"	
+primary_colour:	"#a80050"	# Secondary colour use for poster design.
+secondary_colour:	"#84003d"	# Main colour used for poster design.
+accent_colour:	"#e6007e"	# A third colour option.
+author_textcol: "white"
+title_textsize: "90pt"
+author_textsize: "60pt"
+body_textsize: "25pt"
+output: 
+  posterdown::posterdown_html:
+    self_contained: true
+    pandoc_args: --mathjax
+    number_sections: false
+knit: pagedown::chrome_print
+---
+
+```{css, echo=FALSE}
+div.logo_left{
+  width: 20%;
+}
+div.poster_title{
+  width: 80%;
+}
+.section h4 {
+    break-after: column;
+}
+div.footnotes {
+    font-size: 18pt;
+}
+```
+
+<!-- Don't change anything above, except the title and author names, unless you know what you are doing. -->
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      tidy = FALSE,
+                      message = FALSE,
+                      fig.align = 'center',
+                      out.width = "100%")
+options(knitr.table.format = "html") 
+# Load any additional libraries here
+library(tidyverse)
+library(plotly)
+library(kableExtra)
+```
+
+# Background and Problem
+
+Traditional methods analyze longitudinal biomarkers and time-to-event data separately, ignoring their correlation. Joint Modelling addresses this by jointly estimating both processes through shared random effects, reducing bias seen in standard Cox models. By accounting for endogenous covariates, JM improves understanding of disease progression and enables dynamic, real-time risk prediction.
+
+
+
+## Objectives of Project
+
+1.  Fit joint models for longitudinal and survival data in R.
+2.  Compare results with standard approaches (separate Cox-proportional linear mixed-effects models).
+3.  Evaluate predictive performance using real-world health datasets.
+
+# Data Sources and Datasets
+
+Open source dataset from R packages:
+
+- AIDS ("aids") dataset from R package, "JM" 
+- PBC ("pbc2") dataset from R package, "JMbayes2"
+
+<!-- This #### below causes the columns to break -->
+
+<!-- You can change where you put these breaks, and the "column_numbers: 4" argument in the YAMLS header to change the layout of the poster, with care! -->
+
+#### 
+
+# Early Results / Descriptive Statistics of Datasets
+
+- AIDS dataset
+
+```{r mytable, out.width='80%'}
+library(gtsummary)
+
+# load dataset 
+data("aids", package = "JM")
+
+aids_df <- aids %>%
+  mutate(
+    id     = as.integer(patient),  # explicit subject ID
+    logCD4 = log(CD4)
+  ) %>%
+  arrange(id, obstime)
+
+#extract a summary of data
+tb1 <- aids_df %>% tbl_summary(by=death,
+                        include = c(gender,obstime,prevOI,AZT,drug))%>% 
+  add_overall() %>%
+  add_n()
+
+tb1%>% modify_caption("Summary of AIDS dataset based on death events")
+
+```
+
+```{r, results = "asis" , echo=FALSE,fig.cap = "Longitudinal plot on logCD4 biomarker."}
+ggplot(aids_df, aes(x = obstime, y = logCD4, group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(
+    title = "AIDS: log(CD4) trajectories over time",
+    x = "obstime", y = "log(CD4)"
+  )
+
+```
+
+```{r coxph, results = "asis" , echo=FALSE,fig.cap = "Kaplan Meier survival curve on CD4 ."}
+library(survival)
+library(dplyr)
+library(survminer)
+
+aids_surv <- aids_df %>%
+  distinct(id, Time, death)
+
+aids_base <- aids_df %>%
+  group_by(id) %>%
+  arrange(obstime, .by_group = TRUE) %>%
+  slice(1) %>%                     # baseline record per subject
+  ungroup() %>%
+  mutate(
+    cd4_grp = ntile(CD4, 3),
+    cd4_grp = factor(cd4_grp, labels = c("Low","Medium","High"))
+  )
+
+# Pull baseline covariates 
+aids_cov <- aids_df %>%
+  group_by(id) %>%
+  slice(1) %>%                     # baseline covariates per subject
+  ungroup() %>%
+  select(id, prevOI, drug, AZT,gender)
+
+
+# Survival frame with tertiles + covariates
+km_aids_df <- aids_surv %>%
+  left_join(aids_base %>% select(id, cd4_grp), by = "id") %>%
+  left_join(aids_cov, by = "id") %>%
+  filter(!is.na(cd4_grp))
+
+fit_km_aids <- survfit(Surv(Time, death) ~ cd4_grp, data = km_aids_df)
+
+ggsurvplot(
+  fit_km_aids, data = km_aids_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+  
+```
+
+
+
+```{r lme, results = "asis" , echo=FALSE}
+library(nlme)
+library(broom.mixed)
+
+#linear mix effect model dataframe
+aids_lme_df <- aids_df %>% 
+  mutate(logCD4=log1p(CD4))%>% 
+  filter(is.finite(logCD4), is.finite(obstime))
+
+
+#linear mixed model
+aids_lme_prevOI <- nlme::lme(
+  logCD4~obstime+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+
+aids_lme_full <- nlme::lme(
+  logCD4~obstime+gender+drug+AZT+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+
+
+```
+
+
+
+```{r jm, results = "asis", echo=FALSE}
+
+
+cox_aids_AZT <- coxph(Surv(Time, death) ~ AZT, data = km_aids_df, x = TRUE)
+
+cox_aids_full <- coxph(Surv(Time, death) ~ gender+drug+AZT+prevOI, data = km_aids_df, x = TRUE)
+
+#single covariate
+jm_aids <- JM::jointModel(
+  lmeObject = aids_lme_prevOI,
+  survObject = cox_aids_AZT,
+  timeVar = "obstime"
+)
+
+jm_aids_full <- JM::jointModel(
+  lmeObject = aids_lme_full,
+  survObject = cox_aids_full,
+  timeVar = "obstime"
+)
+
+#full covariates
+jm_aids_full_tidy <- bind_rows(
+  data.frame(
+    Model = "Full",
+    Component = "Longitudinal",
+    Term = names(jm_aids_full$coefficients$betas),
+    Estimate = jm_aids_full$coefficients$betas
+  ),
+  data.frame(
+    Model = "Full",
+    Component = "Survival",
+    Term = names(jm_aids_full$coefficients$gammas),
+    Estimate = jm_aids_full$coefficients$gammas
+  ),
+  data.frame(
+    Model = "Full",
+    Component = "Association",
+    Term = "alpha",
+    Estimate = jm_aids_full$coefficients$alpha
+  )
+)
+
+
+#single covariate
+jm_aids_tidy <- bind_rows(
+  data.frame(
+    Model = "Base",
+    Component = "Longitudinal",
+    Term = names(jm_aids$coefficients$betas),
+    Estimate = jm_aids$coefficients$betas
+  ),
+  data.frame(
+    Model = "Base",
+    Component = "Survival",
+    Term = names(jm_aids$coefficients$gammas),
+    Estimate = jm_aids$coefficients$gammas
+  ),
+  data.frame(
+    Model = "Base",
+    Component = "Association",
+    Term = "alpha",
+    Estimate = jm_aids$coefficients$alpha
+  )
+)
+
+
+jm_aids_full_tidy%>% kable(
+    caption = "Joint model with full covariates",
+    align = 'c',"html"
+  ) %>%
+  kable_styling(font_size = 20)
+
+jm_aids_tidy%>% kable(
+    caption = "Joint model with single covariates",
+    align = 'c',"html"
+  ) %>%
+  kable_styling(font_size = 20)
+
+
+
+
+```
+
+####
+
+- PBC dataset
+```{r}
+# PBC data (JMbayes2)
+data("pbc2", package = "JMbayes2")
+data("pbc2.id", package = "JMbayes2")
+
+pbc <- pbc2 %>%
+  mutate(id = as.integer(id),
+         sex = factor(sex)) %>%
+  arrange(id, year)
+
+# survival frame with explicit {0,1} event indicator
+pbc_surv <- pbc2.id %>%
+  mutate(
+    id = as.integer(id),
+    event = as.integer(status2 != 0),
+    sex = factor(sex) 
+  )
+library(table1)
+table1(~sex+status+drug+ascites+edema|(factor(status2)),data=pbc,caption="Table 3 : Summary of PBC dataset based on death events")
+```
+
+```{r,fig.cap = "Longitudinal plot on logserBilir biomarker."}
+ggplot(pbc, aes(x = year, y = log(serBilir), group = id)) +
+  geom_line(alpha = 0.15, color = "grey40") + 
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, 
+              color = "#a80050", fill = "#e6007e", linewidth = 1.2) +
+  labs(x = "Years since baseline", 
+       y = "log(serum bilirubin)") +
+  theme_minimal()
+```
+
+
+```{r,fig.cap = "Kaplan Meier survival curve on serBilir."}
+library(survival)
+library(survminer)
+pbc_surv <- pbc2.id %>%
+  mutate(id = as.integer(id),
+         event = as.integer(status2 != 0))
+
+pbc_base <- pbc %>%
+  group_by(id) %>%
+  arrange(year, .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(bili_grp = ntile(serBilir, 3),
+         bili_grp = factor(bili_grp, labels = c("Low","Med","High")))
+
+km_df <- pbc_surv %>%
+  left_join(pbc_base %>% select(id, bili_grp), by = "id") %>%
+  filter(!is.na(bili_grp))
+
+fit_km_pbc <- survfit(Surv(years, event) ~ bili_grp, data = km_df)
+ggsurvplot(
+  fit_km_pbc, 
+  data = km_df, 
+  risk.table = TRUE,
+  palette = c("#e6007e", "#a80050", "#84003d"), 
+  title = "Survival by Baseline Bilirubin",
+  xlab = "Years", 
+  ylab = "Survival Prob.",
+  legend.title = "Bilirubin",
+  legend.labs = c("Low", "Med", "High"),
+  fontsize = 3.5,           
+  tables.height = 0.25,    
+  ggtheme = theme_minimal(base_size = 10), 
+  risk.table.theme = theme_survminer(base_size = 9) 
+)
+```
+
+#### 
+
+# Next Project Steps
+
+We plan to conduct further analysis:
+
+- joint model on the pbc dataset
+
+- dynamic prediction on pbc and aids dataset
+
+- applied joint model on real world dataset
+
+
+# GitHub
+
+The code and datasets for this project can be viewed at our GitHub repository here: <https://github.com/>
+
+
+
+# References
+
+1. Mchunu NB, Mwambi HG, Reddy T, Yende-Zuma N, Naidoo K. BMC Infectious Diseases, 2020.
+
+2. Potts S, Rappl A, Kurz K, Bergherr E. arXiv:2504.18288v1 [stat.AP], 2025.
+
+3. Hickey GL, Philipson P, Jorgensen A, Kolamunnage-Dona R. The International Journal of Biostatistics, 2018.
+
+4. Rizopoulos D. Biometrics, 2011.
+
+

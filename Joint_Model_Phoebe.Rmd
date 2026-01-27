@@ -1,0 +1,475 @@
+---
+title: "Joint_model_Phoebe"
+author: "Phoebe"
+date: "2025-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(MASS)
+library(gtsummary)
+library(dplyr)
+library(survival)
+library(survminer)
+library(knitr)
+library(sjPlot)
+library(JMbayes2)
+library(table1)
+```
+
+
+
+## 2.AIDS DATA
+
+```{r}
+data("aids", package = "JM")
+data("aids.id", package = "JM")
+
+aids_df <- aids %>%
+  mutate(
+    id     = as.integer(patient),  # explicit subject ID
+    logCD4 = log(CD4)
+  ) %>%
+  arrange(id, obstime)
+
+aids_surv <- aids_df %>%
+  distinct(id, Time, death)
+```
+
+### 2.1.1 Summary of data
+
+
+```{r}
+#table1(~gender+obstime+prevOI+AZT+drug|death,data=aids_df)
+aids_df %>% tbl_summary(by=death,include = c(gender,obstime,prevOI,AZT,drug))
+```
+
+
+
+### 2.1.2 Longitudinal data (logCD4) over time
+
+```{r}
+plot <- ggplot(aids_df, aes(x = obstime, y = logCD4, group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(
+    title = "AIDS: log(CD4) trajectories over time",
+    x = "obstime", y = "log(CD4)"
+  )
+print(plot)
+```
+
+
+#### Longitudinal data (logCD4) over time in different gender (Male vs Female)
+```{r}
+ggplot(aes(x=obstime,y=logCD4,group=id),data=aids_df)+geom_line(alpha=0.3)+facet_wrap( ~gender) + labs(title="LogCD4 over time in different gender")
+
+```
+
+#### Longitudinal data (logCD4) over time in different drugs (drug ddc vs drug ddl)
+```{r}
+ggplot(aes(x=obstime,y=logCD4,group=id),data=aids_df)+geom_line(alpha=0.3)+facet_wrap( ~drug) + labs(title="LogCD4 over time in different drugs")
+```
+
+#### Longitudinal data (logCD4) over time in AZT (Intolerance vs Failure)
+```{r}
+ggplot(aes(x=obstime,y=logCD4,group=id),data=aids_df)+geom_line(alpha=0.3)+facet_wrap( ~AZT) + labs(title="LogCD4 over time in AZT")
+```
+
+
+
+```{r}
+aids_lme_df <- aids_df %>% 
+  mutate(logCD4=log1p(CD4))%>%#remove infinite
+  filter(is.finite(logCD4), is.finite(obstime))
+```
+
+### 2.1.3 Linear Mixed Model 
+
+
+##### question : How does CD4 change over time?
+##### random effect: random intercept only
+
+```{r}
+aids_lme <- nlme::lme(
+  logCD4~obstime,
+  random=~1|id,
+  data=aids_lme_df)
+summary(aids_lme)
+```
+##### Interpretations: The intercept standard deviation is 0.5983, indicates the variability of baseline outcomes across different subject. The residual standard deviation is 0.2976, indicates the variability of observations around their predicted values within subjects.The average estimate of logCD4+1 is 1.91 when time=0. The average estimate of logCD4+1 is -0.022 when obstime increases by 1 unit. The AIC score of this model is 1770.973 and BIC score is 1791.958.
+ 
+##### question : How does CD4 change over time?
+##### random effect: random intercept + random slope
+```{r}
+aids_lme2 <- nlme::lme(
+  logCD4~obstime,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme2)
+
+```
+##### Interpretation: The intercept standard deviation is 0.5913,the obstime standard deviation is 0.026 and the residual standard deviation is 0.2675.The average estimate of logCD4+1 is 1.914 when time=0. The average estimate of logCD4+1 is -0.025 when obstime increases by 1 unit.The AIC score of this model is 1737.717 and BIC score is 1769.195.
+
+```{r}
+AIC(aids_lme,aids_lme2)
+BIC(aids_lme,aids_lme2)
+result <- data.frame(aids_lme$logLik,aids_lme2$logLik)
+result
+```
+##### Interpretation:By comparing the model with random intercept and (random intercept and random slope), the model with random intercept and random slope has a lower AIC and BIC score, and larger values for loglikelihood. This indicates that by incorporating random intercept and random slope has a better performance.
+
+##### Linear Mixed Model (all covariates)
+```{r}
+aids_lme_full <- nlme::lme(
+  logCD4~obstime+gender+drug+AZT+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_full)
+```
+##### Interpretation: Based on the result above, prevOI shows a significant relationship with p value of 0.
+
+
+##### Check for multicollinearity-variance inflation factor
+```{r}
+library(performance)
+
+check_collinearity(aids_lme_full)
+```
+#### It shows that there is no multicollinearity based on the VIF value on the covariates. 
+
+##### Linear Mixed Model (-gender)
+##### question : How does CD4 change over time? based on gender 
+```{r}
+aids_lme_gender <- nlme::lme(
+  logCD4~obstime+gender,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_gender)
+```
+##### Interpretation: Based on the p value of 0.5917 is large (>0.05), it shows that it is not a significant predictor.
+
+##### Linear Mixed Model (-drug)
+##### question : How does CD4 change over time? based on drug 
+```{r}
+aids_lme_drug <- nlme::lme(
+  logCD4~obstime+drug,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_drug)
+```
+##### Based on the p value of 0.3327 is large (>0.05), it shows that it is not a significant predictor.
+
+
+##### Linear Mixed Model (-AZT)
+##### question : How does CD4 change over time? based on AZT 
+```{r}
+aids_lme_AZT <- nlme::lme(
+  logCD4~obstime+AZT,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_AZT)
+```
+##### Based on the p value of 0 is small (<0.05), it shows that it is a significant predictor.
+
+##### Linear Mixed Model (-prevOI)
+##### question : How does CD4 change over time? based on prevOI 
+```{r}
+aids_lme_prevOI <- nlme::lme(
+  logCD4~obstime+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_prevOI)
+```
+##### Based on the p value of 0 is small (<0.05), it shows that it is a significant predictor.
+
+#### Plot of graph based on the observed value and the fitted lme (-prevOI)
+```{r}
+set.seed(182)
+#sample 20 subjects
+sample_20 <- sample(unique(aids_lme_df$id), size = min(20, length(unique(aids_lme_df$id))))
+
+aids_sub_df <- aids_lme_df %>%
+  dplyr::filter(id %in% sample_20) %>%
+  dplyr::arrange(id, obstime)
+
+# IMPORTANT: supply the subset as newdata so lengths match
+aids_sub_df <- aids_sub_df %>%
+  dplyr::mutate(fitted = predict(aids_lme_prevOI, newdata = aids_sub_df, level = 1))
+
+ggplot(aids_sub_df, aes(obstime, logCD4, group = id)) +
+  geom_line(alpha = 0.2) +
+  geom_line(aes(y = fitted), linewidth = 0.6) +
+  labs(title = "AIDS: observed vs fitted log-CD4 (subset)",
+       x = "Obstime", y = "log(CD4)")
+
+
+```
+
+#### Plot of graph based on the observed value and the fitted lme (-full covariate)
+
+```{r}
+set.seed(182)
+#sample 20 subjects
+sample_20 <- sample(unique(aids_lme_df$id), size = min(20, length(unique(aids_lme_df$id))))
+
+aids_sub_df <- aids_lme_df %>%
+  dplyr::filter(id %in% sample_20) %>%
+  dplyr::arrange(id, obstime)
+
+# IMPORTANT: supply the subset as newdata so lengths match
+aids_sub_df <- aids_sub_df %>%
+  dplyr::mutate(fitted = predict(aids_lme_full, newdata = aids_sub_df, level = 1))
+
+ggplot(aids_sub_df, aes(obstime, logCD4, group = id)) +
+  geom_line(alpha = 0.2) +
+  geom_line(aes(y = fitted), linewidth = 0.6) +
+  labs(title = "AIDS: observed vs fitted log-CD4 (subset)",
+       x = "Obstime", y = "log(CD4)")
+
+
+```
+
+##### Linear Mixed Model (-prevOI + AZT)
+##### question : How does CD4 change over time? based on prevOI + AZT
+```{r}
+aids_lme_prevOI_AZT <- nlme::lme(
+  logCD4~obstime+prevOI+AZT,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_prevOI_AZT)
+```
+#### Interpretation: Since prevOIAIDS and AZTfailure shows a significant relationship, it shows that incorporating two covariates,AZTfailure has a larger p value of 0.3959.
+
+
+```{r}
+model <- c("aids_lme_drug","aids_lme_gender","aids_lme_AZT","aids_lme_prevOI","aids_lme_prevOI_AZT")
+aic <- c(AIC(aids_lme_drug,aids_lme_gender,aids_lme_AZT,aids_lme_prevOI,aids_lme_prevOI_AZT))
+bic <- c(BIC(aids_lme_drug,aids_lme_gender,aids_lme_AZT,aids_lme_prevOI,aids_lme_prevOI_AZT))
+log_Likelihood <- c(aids_lme_drug$logLik,aids_lme_gender$logLik,aids_lme_AZT$logLik,aids_lme_prevOI$logLik,aids_lme_prevOI_AZT$logLik)
+result_adj <- data.frame(model,aic,bic,log_Likelihood)
+result_adj
+```
+#### Interpretation: The model with prevOI coefficients has the lowest AIC score of 1632.525 and the lowest BIC score of 1669.25.
+
+### 2.1.4 KM Survival plot 
+
+```{r}
+library(dplyr)
+
+aids_base <- aids_df %>%
+  group_by(id) %>%
+  arrange(obstime, .by_group = TRUE) %>%
+  slice(1) %>%                     # baseline record per subject
+  ungroup() %>%
+  mutate(
+    cd4_grp = ntile(CD4, 3),
+    cd4_grp = factor(cd4_grp, labels = c("Low","Medium","High"))
+  )
+
+# Pull baseline covariates 
+aids_cov <- aids_df %>%
+  group_by(id) %>%
+  slice(1) %>%                     # baseline covariates per subject
+  ungroup() %>%
+  select(id, gender, drug)
+
+
+# Survival frame with tertiles + covariates
+km_aids_df <- aids_surv %>%
+  left_join(aids_base %>% select(id, cd4_grp), by = "id") %>%
+  left_join(aids_cov, by = "id") %>%
+  filter(!is.na(cd4_grp))
+
+fit_km_aids <- survfit(Surv(Time, death) ~ cd4_grp, data = km_aids_df)
+
+ggsurvplot(
+  fit_km_aids, data = km_aids_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+```
+
+```{r}
+#summarize whether the patient's follow up time and death.
+aids_surv_df <- aids_df %>%
+  distinct(id, Time, death)
+```
+
+#### drug
+```{r}
+aids_surv_drug <- survfit(Surv(Time,death)~ drug,data=aids_surv_df)
+
+plot_surv_drug<-ggsurvplot(
+ aids_surv_drug, data=aids_surv_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+plot_surv_drug
+
+```
+#### Interpretation: Along the years, those who consumed drug ddC has a higher number at risk than those consumed drug ddC.But at the time of 20, it shows that individuals who consumed drug ddI has a higher number at risk.
+
+#### gender
+```{r}
+aids_surv_gender <- survfit(Surv(Time,death)~ gender,data=aids_surv_df)
+
+plot_surv_gender<-ggsurvplot(
+ aids_surv_gender, data=aids_surv_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+plot_surv_gender
+```
+#### Interpretation: Along the years, those with male gender has a higher number at risk.
+
+#### prevOI
+```{r}
+aids_surv_prevOI <- survfit(Surv(Time,death)~ prevOI,data=aids_surv_df)
+
+plot_surv_prevOI<-ggsurvplot(
+ aids_surv_prevOI, data=aids_surv_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+plot_surv_prevOI
+```
+#### Interpretation: Along the years, those who had previous history of AIDS has a higher number at risk than those with no AIDS history. But at the time of 20,  those with no AIDS history has a higher number at risk.
+
+#### AZT
+```{r}
+aids_surv_AZT <- survfit(Surv(Time,death)~ AZT,data=aids_surv_df)
+
+plot_surv_AZT<-ggsurvplot(
+ aids_surv_AZT, data=aids_surv_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+plot_surv_AZT
+```
+#### Interpretation: Along the years, those who had AZT intolerance has a higher number at risk.
+
+
+### 2.1.5 Coxph 
+
+##### full covariates
+```{r}
+cox_aids_full <- coxph(Surv(Time, death) ~ gender+drug+AZT+prevOI, data = aids_surv_df, x = TRUE)
+summary(cox_aids_full)
+```
+##### Interpretation: The hazard ratio for the individuals who consumed drugddI is 23.4% higher over to those who consumed drugddC. The hazard ratio for the individuals who had AZT failure is 17.1% higher over to those who had AZT intolerance.The hazard ratio for the individuals with previous AIDS history is 3 times higher over to those who had No AIDS history. Given the p value, it shows that prevOI is significant. 
+
+##### question: the risk of the death with covariates like use of drugs 
+
+```{r}
+cox_aids_drug <- coxph(Surv(Time, death) ~ drug, data = aids_surv_df, x = TRUE)
+summary(cox_aids_drug)
+```
+##### Interpretation: The hazard ratio for the patients who consumed drugddI is 23.4% higher over to those who consumed drugddC.
+
+
+##### question: the risk of the death with covariates like gender
+```{r}
+cox_aids_gender <- coxph(Surv(Time, death) ~ gender, data = aids_surv_df, x = TRUE)
+summary(cox_aids_gender)
+```
+##### Interpretation: The hazard ratio for male patients is 15.26% lower than female patients.
+
+
+##### question: the risk of the death with covariates like AZT
+
+```{r}
+cox_aids_AZT <- coxph(Surv(Time, death) ~ AZT, data = aids_surv_df, x = TRUE)
+summary(cox_aids_AZT)
+```
+##### Interpretation: There are 2 times higher of hazard ratio for the patients who encountered AZT failure over to those who encountered AZT intolerance.
+
+##### AZT has p value of 1.29e-06, shows that it is a significant predictor.
+
+
+
+
+### 2.1.6 Joint model
+#### -with single predictor in lme model and surv model
+```{r}
+jm_aids <- JM::jointModel(
+  lmeObject = aids_lme_prevOI,
+  survObject = cox_aids_AZT,
+  timeVar = "obstime"
+)
+summary(jm_aids)
+```
+#### Interpretation: The estimated mean of outcome at time=0 and no AIDS history is 2.3171.The outcomes decreases by 0.0277 on average when increase in the observe time, holding prevOI as constant. Those with previous history of AIDS decreases by 0.6119 than those with no AIDS history, holding time as constant. The association of -1.3327 indicates that an unit increase in the logCD4 associates with 73.62% (100-26.38) decrease in the hazard event  
+
+```{r}
+jm_aids_method1 <- JM::jointModel(
+  lmeObject = aids_lme_prevOI,
+  survObject = cox_aids_AZT,
+  timeVar = "obstime",
+  method = "spline-PH-aGH"
+)
+summary(jm_aids_method1)
+```
+#### Interpretation: The estimated mean of outcome at time=0 and no AIDS history is 2.3160.The outcomes decreases by 0.0279 on average when increase in the observe time, holding prevOI as constant. Those with previous history of AIDS decreases by 0.6114 than those with no AIDS history, holding time as constant. The association of -1.3472 indicates that an unit increase in the logCD4 associates with 74% (100-26) decrease in the hazard event.
+
+```{r}
+jm_aids_method2 <- JM::jointModel(
+  lmeObject = aids_lme_prevOI,
+  survObject = cox_aids_AZT,
+  timeVar = "obstime",
+  method = "piecewise-PH-aGH"
+)
+summary(jm_aids_method2)
+```
+#### Interpretation: The estimated mean of outcome at time=0 and no AIDS history is 2.3160.The outcomes decreases by 0.0279 on average when increase in the observe time, holding prevOI as constant. Those with previous history of AIDS decreases by 0.6114 than those with no AIDS history, holding time as constant. The association of -1.3587 indicates that an unit increase in the logCD4 associates with 74.30% (100-25.70) decrease in the hazard event   
+
+### 2.1.7 Joint model comparison
+
+```{r}
+model <- c("jm_aids","jm_aids_method1","jm_aids_method2")
+aic <- c(AIC(jm_aids,jm_aids_method1,jm_aids_method2))
+bic <- c(BIC(jm_aids,jm_aids_method1,jm_aids_method2))
+log_Likelihood <- c(jm_aids$logLik,jm_aids_method1$logLik,jm_aids_method2$logLik)
+
+result_jm <- data.frame(aic,bic,log_Likelihood)
+result_jm
+```
+##### Interpretation: Based on the result above, it shows that joint model with default method is the best with the lowest AIC score of 3163.39, lowest BIC score of 3209.00 and second highest of log-likehood value(1570.693).
+
+##### Joint model with all covariates
+```{r}
+jm_aids_full <- JM::jointModel(
+  lmeObject = aids_lme_full,
+  survObject = cox_aids_full,
+  timeVar = "obstime"
+)
+summary(jm_aids_full)
+```
+##### Interpretation: In the linear mixed model, it shows that prevOIAIDS has the small p value(<0.05), and shows significant relationship to the events. In the coxph model, based on the p value, it shows that drugddI and prevOIAIDS shows a significant relationship to the survival. The association of -1.2138 indicates that an unit increase in the logCD4 associates with 70.29% (100-29.71) decrease in the hazard event.
+
+
+```{r}
+model <- c("jm_aids","jm_aids_full")
+aic <- c(AIC(jm_aids,jm_aids_full))
+bic <- c(BIC(jm_aids,jm_aids_full))
+log_Likelihood <- c(jm_aids$logLik,jm_aids_full$logLik)
+
+result_jm_full <- data.frame(model,aic,bic,log_Likelihood)
+result_jm_full
+```
+##### Interpretation: Joint model with full covariates has a lower AIC of 3155.85 compared to joint model with linear mixed model of prevOI and cox model with AZT. However, it shows that joint model with linear mixed model of prevOI and cox model with AZT has a higher BIC score of 3209.00 and has a higher log likelihood score of -1570.69.
+
+```{r}
+#sjPlot::tab_model(aids_lme, cox_aids)
+
+#show.icc=FALSE,show.re.value,dv.labels=c(),digits=3)
+```
+
+

@@ -1,0 +1,217 @@
+---
+title: "Joint models anushka"
+author: "Anushka Muley"
+date: "2025-11-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+suppressPackageStartupMessages({library(ggplot2)
+library(MASS)
+library(gtsummary)
+library(dplyr)
+library(survival)
+library(survminer)
+library(knitr)
+library(sjPlot)
+library(JMbayes2)
+library(splines)})
+```
+
+
+## Load package
+
+
+```{r}
+# PBC data (JMbayes2)
+data("pbc2", package = "JMbayes2")
+data("pbc2.id", package = "JMbayes2")
+
+pbc <- pbc2 %>%
+  mutate(id = as.integer(id),
+         sex = factor(sex)) %>%
+  arrange(id, year)
+
+# survival frame with explicit {0,1} event indicator
+pbc_surv <- pbc2.id %>%
+  mutate(
+    id = as.integer(id),
+    event = as.integer(status2 != 0),
+    sex = factor(sex) 
+  )
+```
+#Descriptive Statistics
+
+```{r}
+library(dplyr)
+
+pbc %>%
+  summarise(
+    n = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    median_bili = median(serBilir, na.rm = TRUE),
+    min_bili = min(serBilir, na.rm = TRUE),
+    max_bili = max(serBilir, na.rm = TRUE)
+  )
+
+```
+# Summary Table
+
+```{r}
+library(gtsummary)
+
+pbc %>%
+  select(age, status, sex, serBilir, albumin, drug, year, ascites, edema) %>%
+  tbl_summary(
+    missing = "always"
+  ) %>%
+  modify_header(label ~ "**Variable**") %>%
+  bold_labels()
+
+```
+
+
+
+#Longitudinal Spagetti
+
+```{r}
+p_pbc_long <- ggplot(pbc, aes(x = year, y = log(serBilir), group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(title = "PBC: log(serum bilirubin) trajectories",
+       x = "Years since baseline", y = "log(serum bilirubin)")
+p_pbc_long
+
+```
+
+
+
+# Plot for visualisation
+
+```{r}
+ggplot(pbc, aes(year, log(serBilir), group = id)) +
+  geom_line(alpha = 0.15) +
+  facet_wrap(~ sex) +
+  labs(title = "Log(bilirubin) trajectories by sex",
+       x = "Years", y = "log(bilirubin)")
+
+```
+```{r}
+ggplot(pbc, aes(year, log(serBilir), group = id)) +
+  geom_line(alpha = 0.15) +
+  facet_wrap(~ drug) +
+  labs(title = "Log(bilirubin) trajectories by drug",
+       x = "Years", y = "log(bilirubin)")
+
+```
+Kaplan–Meier by baseline bilirubin (tertiles)
+```{r, fig.width=8,fig.height=8}
+pbc_surv <- pbc2.id %>%
+  mutate(id = as.integer(id),
+         event = as.integer(status2 != 0))
+
+pbc_base <- pbc %>%
+  group_by(id) %>%
+  arrange(year, .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(bili_grp = ntile(serBilir, 3),
+         bili_grp = factor(bili_grp, labels = c("Low","Medium","High")))
+
+# Now join works
+km_df <- pbc_surv %>%
+  left_join(pbc_base %>% select(id, bili_grp), by = "id") %>%
+  filter(!is.na(bili_grp))
+
+fit_km_pbc <- survfit(Surv(years, event) ~ bili_grp, data = km_df)
+
+ggsurvplot(
+  fit_km_pbc, data = km_df, risk.table = TRUE,
+  title = "PBC: Survival by baseline serum bilirubin tertiles",
+  legend.title = "Baseline ser. bilirubin"
+)
+
+```
+# Longitudinal Model
+
+```{r}
+# LME (log serBilir ~ nonlinear time + covariates)
+model1 <- nlme::lme(
+  log(serBilir) ~ year + sex + age,
+  random = ~ year | id,
+  data = pbc, na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+class(model1)
+summary(model1)
+is.null(model1)
+inherits(model1, "try-error")
+
+```
+# Survival Model
+
+```{r}
+# Cox (time to event)
+cox_pbc <- coxph(Surv(years, event) ~ sex + age, data = pbc_surv, x = TRUE, y = TRUE)
+summary(cox_pbc)
+#convert categorical variable into factor
+pbc_surv <- pbc_surv %>%
+  mutate(sex = factor(sex, labels = c("Female", "Male")))
+```
+
+The bilirubin increases non linearly over time.
+The females have stighly lower bilirubin than males. Since p value is large we fail reject the null hypothesis that there is a difference in bilirubin levels of males and females.
+
+
+# SJ Plot
+```{r}
+# Longitudinal Model 1: linear time
+model1 <- nlme::lme(
+  log(serBilir) ~ year + sex + age,
+  random = ~ year | id,
+  data = pbc,
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+# Longitudinal Model 2: spline nonlinear time 
+model2 <- nlme::lme(
+  log(serBilir) ~ ns(year, 2) + sex + age,
+  random = ~ ns(year, 2) | id,
+  data = pbc,
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+# Longitudinal Model 3: spline nonlinear time 
+model3 <- nlme::lme(
+  log(serBilir) ~ ns(year, 3) + sex + age,
+  random = ~ ns(year, 3) | id,
+  data = pbc,
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+
+tab_model(model1, model2, model3,
+          dv.labels = c("Model 1", "Model 2", "Model 3"),
+          show.aic = TRUE,
+          show.se = TRUE,
+          show.ci = FALSE)
+
+```
+
+#Joint Model
+
+```{r}
+
+```
+

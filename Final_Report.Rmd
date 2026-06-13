@@ -1,0 +1,2136 @@
+---
+title: "Joint Models of longitudinal outcomes and time to event data"
+
+authors:
+  - name: "Phoebe Wong Hui Lei"
+    affiliation: "University of Galway"
+    email: "p.wong2@universityofgalway.ie"
+    
+  - name: "Anushka Muley"
+    affiliation: "University of Galway"
+    email: "A.Muley1@universityofgalway.ie"
+
+abstract: |
+  Longitudinal biomarkers are frequntly collected in modelling time to event outcomes in clinical studies. In general, these two types of data are modelled separately , which fail to consider the association between individuals biomarker trajectory and the risk of the event happened. Joint modelling is a statistical approach that simultaneously analyzes longitudinal and survival processes, providing more reliable inference and dynamic risk prediction.
+
+  This study applies joint modelling techniques to three clinical datasets(AIDS,PBC and subset of MIMIC-IV dataset)involving repeated biomarker measurements and time-to-event outcomes.Exploratory analyses were first conducted to examine the longitudinal trajectories and occurrence of events in each dataset.Linear mixed-effects models and Cox proportional hazards models were then fitted as submodels and combined within a joint modeling framework to investigate the relationship between biomarker evolution and event risk.In addition, both full and parsimonious specifications of the longitudinal and survival submodels were studied to identify the most appropriate model structure for joint modeling and to achieve a balance between model complexity and explanatory power.
+  
+   The results demonstrate that the longitudinal biomarkers exhibit significant associations with the corresponding survival outcomes across the datasets, highlighting the importance of accounting for their dependence. There is some cases which parsimonious model performed better over full covariate models, suggesting the specific covariate explain most of the variabiity in the data. The strength of joint modelling in capturing the association between longitudinal and survival processes and provide personalised risk prediction which identify high risk patients at earlier stages.Overall, this study demonstrates the usefulness of joint models for studying clinical data containing both repeated measurements and time-to-event outcomes.
+  
+
+bibliography: references.bib
+biblio-style: unsrt
+
+output:
+  rticles::arxiv_article:
+    latex_engine: xelatex
+
+header-includes:
+  - "\\newcommand{\\pandocbounded}[1]{#1}"
+  - "\\usepackage{amsmath}"
+  - "\\usepackage{multicol}"
+  - "\\usepackage{float}"
+  - "\\usepackagep[section]{placeins}"
+---
+
+# Introduction
+
+Here goes an introduction text
+
+
+## Related Works
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  dpi = 300             # high quality for PDF
+)
+```
+
+```{r echo=FALSE}
+library(knitr)
+library(splines)
+library(patchwork)
+library(kableExtra)
+library(table1)
+library(rticles)
+library(dplyr)
+library(broom)
+library(broom.mixed)
+library(gtsummary)
+library(ggplot2)
+library(survival)
+library(survminer)
+library(nlme)
+library(performance)
+library(modelsummary)
+library(JMbayes2)
+```
+
+
+
+# Methodology
+This section describes the methodological framework adopted in this study for analyzing longitudinal and time-to-event data.The analysis was conducted using three clinical datasets containing repeated biomarker measurements and corresponding survival outcomes. The methodology consists of several components such as cox proportional hazard model, linear mixed effect model, joint model and dynamic prediction. These components examining the relationship between longitudinal and survival processes and assessing the overall performance of the modeling framework.
+
+
+## Cox Proportional Hazard model
+
+The Cox Proportional Hazards (PH) model (Cox, 1972) is a semi-parametric survival model used to examine the association between survival time and covariates. The model estimates the effects of covariates on the hazard of an event without requiring a specific distribution for survival times. The estimated effects are interpreted through hazard ratios, which quantify the relative risk associated with the covariates. Censored observations contribute to the risk set until their censoring times, allowing all available information to be incorporated into the analysis. In this study, the Cox PH model was employed to analyse the relationship between the selected covariates and the survival outcome.
+
+
+The following formula is for cox proportional hazard model: 
+$$
+h_i(t)=h_0(t)\exp(\beta_1 x_{i1}+\cdots+\beta_p x_{ip})
+$$
+where:
+-h(t|X) is the hazard at time t for a subject with covariate values X
+-h₀(t) is the baseline hazard function when all covariates equal zero
+-X₁, X₂, ..., Xₚ are predictor variables 
+-β₁, β₂, ..., βₚ are coefficients estimated from data
+-exp(βᵢ) is the hazard ratio for covariate 
+
+## Linear Mixed Effect model
+Linear mixed-effects models allow the incorporation of both fixed and random effects. Fixed effects describe the average relationship between covariates and the outcome variable across the entire population. In contrast, random effects capture variability across individuals or clusters, allowing subject-specific deviations from the population-level trend.
+
+In this study, two types of random effects are included: random intercepts and random slopes. Random intercepts allow individuals to have different baseline levels of the outcome, while random slopes allow the effect of covariates (or time) to vary across individuals or clusters. Together, these components enable the model to account for both population-level effects and individual heterogeneity in longitudinal trajectories.
+
+The following formula is for linear mixed effect model:
+$$
+y_i(t)=\beta_0+\beta_1 t + b_{0i}+b_{1i}t+\varepsilon_i(t)
+$$
+where 
+β₀ : fixed intercept. represent average baseline value at time=0
+β₁ : fixed slope, represents overall population trend
+b₀ᵢ: random intercept
+b₁ᵢ: random slope
+εᵢ(t) : residual error, represents unexplained variation not accounted 
+
+## Joint model
+This study considers two main frameworks for joint modelling of longitudinal and survival data: the standard (frequentist) joint model based on maximum likelihood estimation, and the Bayesian joint modelling approach. Both frameworks aim to simultaneously analyse longitudinal biomarker trajectories and time-to-event outcomes while accounting for their association through shared random effects.
+
+The formula below is for Joint Model:
+$$
+\begin{aligned}
+h_i(t) &= h_0(t)\exp\left(\gamma Z_i + \alpha m_i(t)\right)\\
+m_i(t) &= \mathbf{x}_i(t)^\top \boldsymbol{\beta} + \mathbf{z}_i(t)^\top \mathbf{b}_i\\
+y_i(t) &= \beta^T X_i(t) + b_i + \epsilon_i(t)
+
+\end{aligned}
+$$
+
+where 
+mᵢ(t) : true underlying value of the continuous outcome at time t
+α : association between longitudinal process and survival outcome.
+xᵢ(t) : design matrix for population level trajectories
+zᵢ(t) : design matrix for individual deviation
+εᵢ(t) : measurement error term
+
+In Bayesian joint modelling, prior knowledge is incorporated through the specification of prior distributions, and inference is carried out using posterior distributions obtained via Markov Chain Monte Carlo (MCMC) simulation. In contrast, joint models under the frequentist framework rely on maximum likelihood estimation, where parameters are estimated directly from the observed data without the use of prior distributions.
+
+
+## Dynamic Prediction
+
+In this study, dynamic predictions are obtained using a joint modelling framework that simultaneously models the longitudinal trajectories of clinical biomarkers and the survival process. The longitudinal submodel captures the evolution of repeated biomarker measurements over time, while the survival submodel links these trajectories to the hazard of the event of interest through shared random effects. This joint structure enables the incorporation of both baseline covariates and subject-specific longitudinal history into the survival prediction.
+
+The prediction is computed by conditioning on all observed longitudinal measurements up to time t, and generates personalised survival probabilities that are continuously updated as additional biomarker observations become available. The predictive performance of the dynamic model is evaluated through AUC score and Brier score. The higher the AUC score, the stronger the model's capabiity in distinguish both of the classes. The lower the brier score, suggesting a better predictive accuracy.
+
+# Data Analysis
+
+## AIDS dataset
+
+```{r}
+data("aids", package = "JM")
+data("aids.id", package = "JM")
+
+aids_df <- aids %>%
+  mutate(
+    id     = as.integer(patient),  # explicit subject ID
+    logCD4 = log(CD4)
+  ) %>%
+  arrange(id, obstime)
+
+table1(~gender+obstime+prevOI+AZT+drug|death,data=aids_df,caption="Baseline characteristic of AIDS dataset by death status")
+```
+\FloatBarrier
+Based on Table 1, it shows that AIDS dataset contains a total of 1,405 observations of CD4 counts from 467 individuals, with varying follow-up periods from baseline up to the 18th month. The dataset includes several covariates: gender, prevOI, AZT, and drug. The variable prevOI indicates whether the patient had a previous opportunistic infection at baseline. The variable AZT refers to Azidothymidine treatment status, with two categories: intolerance and failure. The variable drug indicates the treatment received, including Zalcitabine (ddC) and Didanosine (ddI).
+
+
+```{r fig.pos = 'H',fig.cap="Biomarker log(CD4) trajectories over time",fig.width=5, fig.height=4, out.width="70%"}
+p_aids_long <- ggplot(aids_df, aes(x = obstime, y = logCD4, group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(
+    x = "obstime", y = "log(CD4)"
+  )
+p_aids_long
+```
+
+Based on Figure XX,the spaghetti plot shows substantial variability between patients, with some individuals having low baseline CD4 levels and others high baseline levels. The LOESS smooth indicates an overall decreasing trend in log(CD4) across the cohort, suggesting that CD4 counts decline gradually over time. Fewer trajectories are observed after month 12, indicating possible loss to follow-up.
+
+### Cox Proportional Hazard model 
+```{r fig.pos = 'H',fig.cap="Kaplan Meier Survival Curve on baseline CD4 tertiles",out.width="60%"}
+aids_surv <- aids_df %>%
+  distinct(id, Time, death)
+
+aids_base <- aids_df %>%
+  group_by(id) %>%
+  arrange(obstime, .by_group = TRUE) %>%   # ensure earliest visit first
+  dplyr::slice(1) %>%                             # baseline row per subject
+  ungroup() %>%
+  mutate(
+    cd4_grp = ntile(CD4, 3),
+    cd4_grp = factor(cd4_grp, labels = c("Low","Medium","High"))
+  ) %>%
+  select(id, cd4_grp, prevOI, drug, AZT, gender)
+
+# Survival frame with tertiles + covariates
+km_aids_df <- aids_surv %>%
+  left_join(aids_base,by = "id") %>%
+  filter(!is.na(cd4_grp))
+
+fit_km_aids <- survfit(Surv(Time, death) ~ cd4_grp, data = km_aids_df)
+
+ggsurvplot(
+  fit_km_aids, data = km_aids_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  legend.title = "Baseline CD4"
+)
+
+```
+
+Based on Figure XX, the Kaplan–Meier curves demonstrate a clear separation of survival probability across baseline CD4 tertiles.
+It suggests that individuals in low CD4 tertile experience substantially lowest survival probability, with the curves diverging early and widening throughout follow-up. 
+
+
+```{r}
+cox_aids_full <- coxph(Surv(Time, death) ~ gender+drug+AZT+prevOI, data = km_aids_df, x = TRUE)
+
+tidy(cox_aids_full,exponentiate = TRUE,conf.int = TRUE)|>
+  as.data.frame() |>
+  transform(
+    `p.value` = {
+      pvals <- as.numeric(as.character(`p.value`))
+      ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+    }
+  ) |>
+  kable(caption = "Cox model for full covariates in AIDS data",digits=3,booktabs=TRUE)
+```
+
+Based on the Table 2 on cox proportional hazards model with full covariates, males have a 29% lower hazard of the event compared to females (HR < 1). Individuals who consumed ddI have a 23.4% higher hazard compared to those who consumed ddC. The hazard of the event for individuals with AZT failure is 17.1% higher than for those with AZT intolerance. Individuals with a previous AIDS history have approximately a three-fold higher hazard compared to those without an AIDS history.
+
+Based on the p-values, prevOI is statistically significant (p = 0.00000001 < 0.05), providing strong evidence that previous opportunistic infection is associated with the hazard of the event.
+
+
+```{r}
+cox_aids_gender <- coxph(Surv(Time, death) ~ gender, data = km_aids_df, x = TRUE)
+#summary(cox_aids_gender)
+
+cox_aids_drug <- coxph(Surv(Time, death) ~ drug, data = km_aids_df, x = TRUE)
+#summary(cox_aids_drug)
+
+cox_aids_AZT <- coxph(Surv(Time, death) ~ AZT, data = km_aids_df, x = TRUE)
+#summary(cox_aids_AZT)
+
+cox_aids_prevOI <- coxph(Surv(Time, death) ~ prevOI, data = km_aids_df, x = TRUE)
+#summary(cox_aids_prevOI)
+
+
+model.coxph <- c("cox_aids_gender","cox_aids_drug","cox_aids_AZT","cox_aids_prevOI")
+
+aic.coxph <- c(AIC(cox_aids_gender,cox_aids_drug,cox_aids_AZT,cox_aids_prevOI)$AIC)
+
+bic.coxph <- c(BIC(cox_aids_gender,cox_aids_drug,cox_aids_AZT,cox_aids_prevOI)$BIC)
+
+log_Likelihood.coxph <-c(as.numeric(logLik(cox_aids_gender)),as.numeric(logLik(cox_aids_drug)),as.numeric(logLik(cox_aids_AZT)),as.numeric(logLik(cox_aids_prevOI)))
+
+result_c_coxph <- data.frame(
+  model.coxph,
+  AIC = aic.coxph,
+  BIC = bic.coxph,
+  logLik = log_Likelihood.coxph
+)
+knitr::kable(result_c_coxph, caption = "Comparison of cox ph model on single covariate",digits = 3)
+
+```
+In Table 3, there is a comparison of the cox proportional hazard models using AIC, BIC, and log-likelihood criteria, the model including prevOI as a covariate shows the best performance. It yields the lowest AIC (2111.917) and BIC (2115.153) values, along with the highest log-likelihood (-1054.958), indicating that this model provides the best fit to the data among the competing models.
+
+```{r}
+modelsummary(
+  list(
+    "Full Cox model" = cox_aids_full,
+    "Parsimonious Cox model" = cox_aids_prevOI
+  ),
+  title = "Comparison of Cox model and parsimonious Cox model result"
+)
+```
+
+In Table 3.1.1(c), it indicates that the full model and the model including only the prevOI covariate show similar performance. This can be observed from the conditional R^2 and marginal R^2 values are also very similar between the two models.
+
+### Linear Mixed Effect model
+
+
+```{r}
+aids_lme_df <- aids_df %>% 
+  mutate(logCD4=log1p(CD4))%>% 
+  filter(is.finite(logCD4), is.finite(obstime))
+
+aids_lme_full <- nlme::lme(
+  logCD4~obstime+gender+drug+AZT+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+
+tidy(aids_lme_full)|>
+  as.data.frame() |>
+transform(
+  `p.value` = {
+    pvals <- as.numeric(as.character(`p.value`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  kable(caption = "Linear mixed effect model for full covariates in AIDS data",digits = 3,booktabs=TRUE)
+```
+
+In Table 4, linear mixed effects model with full covariates such as obstime,gender,drug,AZT,prevOI is fitted to identify factors associated with CD4 counts.Random slope and random intercept is included to account for subject-specific baseline CD4 counts and individually rate of changes of CD4 counts over time.
+
+The model indicates a moderate negative correlation of -0.548 between AZT and prevOI effects, suggesting that these variables may explain overlapping variation in CD4 counts. However, based on the p-values of the fixed effects, only prevOI was statistically significant in explaining the outcome.
+
+```{r}
+check_collinearity(aids_lme_full) |>
+  kable(caption = "Collinearity in linear mixed model with full covariates",digits=3)
+```
+
+In Table 5,it suggets that a low correlation, suggesting that multicollinearity is not the major concern in this dataset.
+
+```{r}
+aids_lme_exc_AZT <- nlme::lme(
+  logCD4~obstime+gender+drug+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+
+
+anova_tab <- as.data.frame(anova(aids_lme_full, aids_lme_exc_AZT))
+anova_tab_clean <- anova_tab[ , -1]
+
+knitr::kable(anova_tab_clean, 
+             caption = "Comparison of linear mixed effects models in ANOVA",
+             digits = 3)
+```
+
+```{r}
+comp_lme <- data.frame(
+  model=c("lme with full covariates","lme exclude AZT"),
+  aic=AIC(aids_lme_full,aids_lme_exc_AZT)$AIC,
+  bic=BIC(aids_lme_full,aids_lme_exc_AZT)$BIC
+)
+
+knitr::kable(comp_lme, caption = "Comparison of linear mixed effect models with and without AZT covariate",digits = 3)
+
+```
+
+In Table 6 , the linear mixed-effects model excluding the AZT covariate shows lower AIC and BIC values, and the LRT indicates no significant loss of fit (p = 0.085). Overall, this suggests that the reduced model provides a better balance between model fit and complexity. Therefore, the model without AZT is preferred for parsimony.
+
+In Table 7 , the comparison of AIC and BIC for both linear mixed-effects models suggests that the model excluding the AZT covariate yielded lower AIC and BIC values. This indicates a better trade-off between model fit and model complexity. Therefore, the reduced model without AZT is preferred on the basis of information criteria.
+
+```{r}
+aids_lme_gender <- nlme::lme(
+  logCD4~obstime+gender,
+  random=~obstime|id,
+  data=aids_lme_df)
+#summary(aids_lme_gender)
+
+aids_lme_drug <- nlme::lme(
+  logCD4~obstime+drug,
+  random=~obstime|id,
+  data=aids_lme_df)
+#summary(aids_lme_drug)
+
+aids_lme_AZT <- nlme::lme(
+  logCD4~obstime+AZT,
+  random=~obstime|id,
+  data=aids_lme_df)
+#summary(aids_lme_AZT)
+
+aids_lme_prevOI <- nlme::lme(
+  logCD4~obstime+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+#summary(aids_lme_prevOI)
+
+aids_lme_prevOI_AZT <- nlme::lme(
+  logCD4~obstime+prevOI+AZT,
+  random=~obstime|id,
+  data=aids_lme_df)
+
+tidy(aids_lme_prevOI_AZT,conf.int = TRUE)|>
+  kable(caption = "Summmary of linear mixed effect model with prevOI and AZT covariates",booktabs = TRUE,
+        digits=3)
+```
+
+Since prevOI and AZT were found to be statistically significant in separate linear mixed-effects models, they were included together as covariates in this linear mixed effect model to adjust for their effects and assess their independent associations with CD4 count. In Table 8, The p-value for prevOI is close to zero, providing strong evidence that previous opportunistic infection is a significant predictor of CD4 count, after adjusting for AZT.
+
+
+```{r}
+model <- c("aids_lme_gender","aids_lme_drug","aids_lme_AZT","aids_lme_prevOI")
+
+aic <- c(AIC(aids_lme_gender,aids_lme_drug,aids_lme_AZT,aids_lme_prevOI)$AIC)
+
+bic <- c(BIC(aids_lme_gender,aids_lme_drug,aids_lme_AZT,aids_lme_prevOI)$BIC)
+
+log_Likelihood <-c(aids_lme_gender$logLik,aids_lme_drug$logLik,aids_lme_AZT$logLik,aids_lme_prevOI$logLik)
+
+result_c_lme <- data.frame(
+  model,
+  AIC = aic,
+  BIC = bic,
+  logLik = log_Likelihood
+)
+
+knitr::kable(result_c_lme, caption = "Comparison of linear mixed effect models with single covariate",digits = 3)
+
+```
+
+In Table 9, the comparison of the LME models using AIC, BIC, and log-likelihood criteria, the model including prevOI as a covariate shows the best performance. It yields the lowest AIC (1632.525) and BIC (1669.245) values, along with the highest log-likelihood (-809.2625), indicating that this model provides the best fit to the data among the competing models.
+
+```{r}
+modelsummary(
+  list(
+    "Full LME model" = aids_lme_exc_AZT,
+    "Parsimonious LME model" = aids_lme_prevOI
+  ),
+  title = "Comparison of linear mixed effect model and parsimonious linear mixed effect model result"
+)
+```
+
+In Table 9, the comparison of linear mixed effect model and parsimonious linear mixed effect model result indicates that the full model and the model including only the prevOI covariate show very similar model fit. The estimated coefficients and confidence intervals for the intercept, obstime, and prevOI are comparable across both models. In addition, both the marginal and conditional R^2
+ values are nearly identical, suggesting that adding additional covariates does not substantially improve the explanatory power of the model.
+
+### Joint Model with JM Package
+
+```{r}
+jm_aids_full <- JM::jointModel(
+  lmeObject = aids_lme_exc_AZT,
+  survObject = cox_aids_full,
+  timeVar = "obstime"
+)
+sumJM <- summary(jm_aids_full, process = "Event")
+
+
+sumJM$`CoefTable-Event` |>
+  as.data.frame() |>
+transform(
+  `p-value` = {
+    pvals <- as.numeric(as.character(`p-value`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  knitr::kable(
+    caption = "Summary of joint model with full covariates",
+    booktabs = TRUE,
+    digits = 3
+  )
+```
+
+In Table 10 shows a linear mixed-effects (LME) model excluding AZT with a Cox proportional hazards model including full covariates. The joint modelling results indicate that both prevOIAIDS and drugDDI have significant associations with survival, which differs from the separate sub-models. This highlights the joint model demonstrates stronger ability to capture the true effects of covariates by accounting for the relationship between CD4 progression and survival.The significant association of -1.213, confirming a dependence between cd4 evolution and survival. This suggests that declining CD4 substantially increases the hazard of death.
+
+```{r}
+jm_aids_pars <- JM::jointModel(
+  lmeObject = aids_lme_prevOI,
+  survObject = cox_aids_prevOI,
+  timeVar = "obstime"
+)
+sumJM_pars <- summary(jm_aids_pars, process = "Event")
+
+sumJM_pars$`CoefTable-Event` |>
+  as.data.frame() |>
+transform(
+  `p-value` = {
+    pvals <- as.numeric(as.character(`p-value`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  knitr::kable(
+    caption = "Summary of parsimonuous joint model",
+    booktabs = TRUE,
+    digits = 3
+  )
+```
+
+In Table 11 shows a combination of a parsimonious linear mixed-effects (LME) model and a parsimonious Cox proportional hazards model, both including the prevOI covariate. The joint model estimates a significant association parameter of −1.1943, providing evidence of a relationship between CD4 evolution and survival. This indicates that higher CD4 values are associated with a lower hazard of the event, suggesting that improved immune status is protective against the risk of death.
+
+```{r}
+model <- c("jm_aids_full","jm_aids_pars")
+
+aic <- c(AIC(jm_aids_full,jm_aids_pars)$AIC)
+
+bic <- c(BIC(jm_aids_full,jm_aids_pars)$BIC)
+
+log_Likelihood <-c(jm_aids_full$logLik,jm_aids_pars$logLik)
+
+result_c_jm <- data.frame(
+  model,
+  AIC = aic,
+  BIC = bic,
+  logLik = log_Likelihood
+)
+knitr::kable(result_c_jm, caption = "Comparison of joint model with full covariates to parsimonious joint model",digits = 3)
+```
+
+In Table 12 shows a comparison between the parsimonious joint model and the joint model with full covariates (exclude AZT in linear mixed effect model), the parsimonious model has a lower AIC (3151.779) and lower BIC (3197.389). This suggests that the parsimonious model provides a better balance between model fit and complexity. However, the joint model with full covariates (exclude AZT in linear mixed effect model) has a slightly higher log-likelihood (1560.923) compared to the parsimonious model, indicating a marginally better model fit. Overall, the parsimonious joint model may be preferred due to its lower AIC and BIC values while maintaining a comparable fit.
+
+### Dynamic prediction
+```{r}
+ND_idx <- aids_df %>%
+  count(id) %>%
+  filter(n >= 4) %>% #keep those with 4 obs
+  slice_head(n = 5) %>% #take the first 5
+  pull(id)
+
+ND_df <- aids_df %>%
+  filter(id %in% ND_idx)
+
+ND_future <- ND_df %>%
+  group_by(id) %>%
+  slice_tail(n=1) %>%  # take last observation
+  ungroup()
+```
+
+```{r fig.cap="Dynamic Survival Predictions for Selected AIDS Patients with Joint Model on Full Covariates",fig.width=12, fig.height=8,fig.pos = "!htbp"}
+patients <- unique(ND_future$id)
+pred_surv_curves_full <- vector("list", length(patients))
+
+par(mfrow = c(2,3))
+par(mar = c(2,2,2,1))   # smaller margins
+par(oma = c(0,0,2,0))
+
+
+for(i in seq_along(patients)) {
+  
+  id_i <- patients[i]
+  newdata_i <- ND_df[ND_df$id == id_i, ]
+  last_time_i <- max(newdata_i$obstime, na.rm = TRUE)
+  
+  future_times <- seq(last_time_i, last_time_i + 5, by = 0.25)
+  
+  s_pred_full <- JM::survfitJM(
+    object    = jm_aids_full,
+    newdata   = newdata_i,
+    idVar     = "id",
+    last.time = last_time_i,
+    survTimes = future_times
+  )
+  
+  #get the summaries of each prediction
+  
+sum_i <- as.data.frame(s_pred_full$summaries[[1]])
+
+  
+  plot(
+    s_pred_full,
+    include.y = TRUE,
+    lwd = 2,
+    main = paste0("Dynamic survival — subject ", id_i)
+  )
+}
+
+```
+
+Figure XX shows subject-specific dynamic survival predictions from joint model with full covariates(exclude AZT in linear mixed effect model) for subject id 2,4,5,7 and 10. Overall, survival probabilities decrease over time for all subjects.Subjects 4 and 7 show lower levels of the longitudinal biomarker compared to other subjects, which, given the negative association between the biomarkers and the hazard in the joint model, results in lower predicted survival probabilities and a steeper decline in their survival curves.
+
+```{r fig.cap="Dynamic Survival Predictions for Selected AIDS Patients with Parsimonious Joint Model",fig.width=12, fig.height=8,fig.pos = "!htbp"}
+patients <- unique(ND_future$id)
+pred_surv_curves <- vector("list", length(patients))
+
+par(mfrow = c(2,3))
+par(mar = c(4,4,2,1))   # smaller margins
+par(oma = c(0,0,2,0))
+
+
+for(i in seq_along(patients)) {
+  
+  id_i <- patients[i]
+  newdata_i <- ND_df[ND_df$id == id_i, ]
+  last_time_i <- max(newdata_i$obstime, na.rm = TRUE)
+  
+  future_times <- seq(last_time_i, last_time_i + 5, by = 0.25)
+  
+  s_pred <- JM::survfitJM(
+    object    = jm_aids_pars,
+    newdata   = newdata_i,
+    idVar     = "id",
+    last.time = last_time_i,
+    survTimes = future_times
+  )
+  
+  #get the summaries of each prediction
+  
+sum_i <- as.data.frame(s_pred$summaries[[1]])
+  
+  
+  plot(
+    s_pred,
+    include.y = TRUE,
+    lwd = 2,
+    main = paste0("Dynamic survival — subject ", id_i)
+  )
+}
+
+
+```
+
+Figure XX presents the subject-specific dynamic survival predictions from the parsimonious joint model for subjects 2, 4, 5, 7, and 10. A similar pattern to the full joint model is observed, with survival probabilities decreasing over time for all subjects. Subjects 4 and 7 exhibit lower levels of the longitudinal biomarker compared with the other subjects. Given the negative association between the biomarker and the hazard in the joint model, these lower biomarker levels correspond to lower predicted survival probabilities and a steeper decline in their survival curves.
+S
+
+```{r}
+aids_df_clean <- aids_df %>%
+  group_by(id) %>%
+  filter(n() >= 4) %>%        
+  filter(var(CD4, na.rm=TRUE) > 0) %>%
+  ungroup()
+
+aids_df_clean <- aids_df_clean %>%
+  mutate(logCD4=log1p(CD4))%>% 
+  filter(is.finite(logCD4))
+
+Tstart <- seq(10, 20, by = 0.5)
+Dt <- 1
+
+auc_res_full <- JM::aucJM(
+  object  = jm_aids_full,
+  newdata = aids_df_clean,
+  Tstart  = Tstart,
+  Dt      = Dt
+)
+auc_res_full
+
+```
+The time-dependent AUC for parsimonious joint model was evaluated within a restricted landmark window between 10 and 20 months due to the concentration of observed events in this period. The resulting AUC of 0.68 reflects the model’s discriminatory ability in predicting short-term risk of event occurrence among patients who are still at risk during this late follow-up phase.
+
+
+```{r}
+auc_res <- JM::aucJM(
+  object  = jm_aids_pars,
+  newdata = aids_df_clean,
+  Tstart  = Tstart,
+  Dt      = Dt
+)
+auc_res
+
+```
+The time-dependent AUC for parsimonious joint model was evaluated within a restricted landmark window between 10 and 20 months due to the concentration of observed events in this period. The resulting AUC of 0.6936 reflects the model’s discriminatory ability in predicting short-term risk of event occurrence among patients who are still at risk during this late follow-up phase.
+
+```{r}
+auc_df_full <- data.frame(
+  time = auc_res_full$Tstart,
+  AUC  = auc_res_full$auc
+)
+ggplot(auc_df_full, aes(x = time, y = AUC)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  ylim(0.5, 1) +
+labs(
+  title = "Time-dependent AUC for Joint Model",
+  x = "Landmark time (t)",
+  y = expression(AUC(t, Delta * t))
+) +
+  theme_minimal(base_size = 14)
+```
+In Figure 3.1.4(c),it displays the Time-dependent AUC for joint model on full covariates(exclude AZT in linear mixed effect model),it exhibits a stable discriminatory performance across all landmark times, suggesting consistent ranking ability over the follow-up period.
+
+
+```{r}
+auc_df <- data.frame(
+  time = auc_res$Tstart,
+  AUC  = auc_res$auc
+)
+ggplot(auc_df, aes(x = time, y = AUC)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  ylim(0.5, 1) +
+  labs(
+    title = "Time-dependent AUC for Joint Model",
+    x = "Landmark time (t)",
+    y = expression(AUC(t, Delta * t))
+  ) +
+  theme_minimal(base_size = 14)
+```
+In Figure 3.1.4(d),it displays the Time-dependent AUC for parsimonious joint model. A similar pattern to the full joint model is observed, with a stable discriminatory performance across all landmark times, suggesting consistent ranking ability over the follow-up period.
+
+
+### Results of AIDS
+
+In the joint model with the full set of covariates (excluding AZT in the linear mixed‐effects submodel), the association parameter is statistically significant (p < 0.05) with an estimated value of −1.194. This negative association indicates that higher CD4 biomarker trajectories are linked to a lower hazard of the event and, consequently, improved survival probabilities. A similar association estimate (−1.194) is obtained in the parsimonious joint model, further supporting the presence of a negative relationship between the biomarker trajectory and the risk of the event.
+
+When the longitudinal and survival processes were analysed separately, only prevOI covariate was found to be statistically significant.However, when  fitting the joint model, additional covariate(drugddI) became significant in the survival submodel. This highlights that the advantage of joint model, that accounts association between longitudinal CD4 trajectory and risk of death.
+
+
+
+## PBC dataset
+```{r echo=FALSE}
+library(table1)
+library(dplyr)
+
+data("pbc2", package = "JMbayes2")
+data("pbc2.id", package = "JMbayes2")
+pbc <- pbc2 %>%
+  mutate(
+    id = as.integer(id),
+    histologic = factor(histologic),
+    sex = factor(sex, labels = c("Female", "Male")),
+    hepatomegaly = factor(hepatomegaly),
+    ascites = factor(ascites),
+    drug = factor(drug)
+  ) %>%
+  arrange(id, year)
+
+table1(
+  ~ age + status + sex + serBilir + albumin + drug + year + ascites + edema | status,
+  data = pbc, caption= "Table 3.2: Baseline characteristic of PBC dataset by status"
+)
+```
+
+Based on table 3.2, it shows that PBC dataset comprises 1,945 longitudinal observations from 312 patients with Primary Biliary Cirrhosis (PBC). The mean age at baseline was 49.3 years (SD = 10.1), reflecting a predominantly middle-aged cohort. The median serum bilirubin was 1.4 mg/dL, with substantial right-skew (range: 0.1–41.0 mg/dL), indicating considerable heterogeneity in disease severity across patients. The variable serBilir refers to serum bilirubin.
+
+```{r echo=FALSE}
+p_pbc_long <- ggplot(pbc, aes(x = year, y = log(serBilir), group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(title = "Figure 3.2: PBC: log(serum bilirubin) trajectories",
+       x = "Years since baseline", y = "log(serum bilirubin)")
+p_pbc_long
+
+```
+
+Based on Figure 3.2, The spaghetti plot reveals substantial between-patient heterogeneity in serum bilirubin trajectories over time. While many patients maintain relatively stable bilirubin levels, a subset exhibit steep upward trajectories, reflecting rapid disease progression. The LOESS smoother shows an overall increasing trend in log(serum bilirubin) across the cohort, confirming progressive liver dysfunction over the study period.
+
+### Cox model
+```{r echo=FALSE}
+library(dplyr)
+
+pbc_surv <- pbc2.id %>%
+  mutate(
+    id = as.integer(id),
+    event = as.integer(status2 != 0)
+  )
+
+pbc_base <- pbc %>%
+  group_by(id) %>%
+  arrange(year, .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(
+    bili_grp = ntile(serBilir, 3),
+    bili_grp = factor(bili_grp, labels = c("Low", "Medium", "High"))
+  )
+
+km_df <- pbc_surv %>%
+  dplyr::left_join(
+    pbc_base %>% dplyr::select(id, bili_grp),
+    by = "id"
+  ) %>%
+  dplyr::filter(!is.na(bili_grp))
+
+fit_km_pbc <- survfit(Surv(years, event) ~ bili_grp, data = km_df)
+
+ggsurvplot(
+  fit_km_pbc,
+  data = km_df,
+  risk.table = TRUE,
+  title = "Figure 3.2.1(a): Kaplan Meier Survival Curve on baseline serum bilirubin tertiles",
+  legend.title = "Baseline ser. bilirubin"
+)
+
+```
+
+Based on Figure 3.2.1(a), the Kaplan–Meier curves demonstrate a clear and statistically meaningful separation in survival probability across baseline serum bilirubin tertiles. Patients in the high tertile experience substantially worse survival, with the curves diverging early and widening throughout follow-up. This confirms that baseline bilirubin is a strong prognostic marker for mortality or transplantation in PBC, and provides early justification for its inclusion as the longitudinal biomarker in the joint model.
+
+```{r echo=FALSE}
+pbc_surv <- pbc_surv %>%
+  mutate(
+    sex = factor(sex, labels = c("Female", "Male")),
+    drug = factor(drug),
+    ascites = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema = factor(edema),
+    histologic = factor(histologic)  
+  )
+
+cox_pbc_full <- coxph(
+  Surv(years, event) ~ age + sex + drug +
+    ascites + hepatomegaly + edema +
+    histologic,
+  data = pbc_surv,
+  x = TRUE, y = TRUE
+)
+tidy(cox_pbc_full, exponentiate = TRUE, conf.int = TRUE)|>
+  kable(caption = "Table 3.2.1(a) Cox Model for full covariates in PBC data")
+```
+
+Based on Table 3.2.1(a) from the Cox proportional hazards model with full covariates in the PBC data, increasing age is associated with a higher hazard of the event, with each additional year increasing the hazard by approximately 3% (HR = 1.03). Males have about a 24% lower hazard compared to females (HR = 0.76), although this effect is not statistically significant. Treatment with D-penicillamine shows little to no effect on hazard (HR = 0.97). Individuals with ascites have more than twice the hazard of those without ascites (HR = 2.20), while those with hepatomegaly have a 79% higher hazard (HR = 1.79), both of which are statistically significant. Edema without diuretics is associated with a modest increase in hazard (HR = 1.35), though not significant, whereas edema despite diuretics is linked to nearly a five-fold increase in hazard (HR = 4.95), indicating a strong and significant effect.
+
+Regarding histologic stage, individuals in stage 4 have approximately nine times the hazard compared to stage 1 (HR = 9.09), which is statistically significant, while stages 2 and 3 show elevated hazards but are not statistically significant. Based on the p-values, age, ascites, hepatomegaly, edema despite diuretics, and histologic stage 4 are statistically significant predictors (p < 0.05), providing strong evidence that these variables are associated with an increased hazard of the event.
+
+
+```{r echo=FALSE}
+# Age
+cox_age <- coxph(Surv(years, event) ~ age, data = pbc_surv, x = TRUE, y = TRUE)
+
+# Sex
+pbc_surv_sex <- pbc_surv %>%
+  mutate(sex = factor(sex, labels = c("Female", "Male")))
+
+cox_sex <- coxph(Surv(years, event) ~ sex, data = pbc_surv_sex, x = TRUE, y = TRUE)
+
+# Drug
+pbc_surv_drug <- pbc_surv %>%
+  mutate(drug = factor(drug))
+
+cox_drug <- coxph(Surv(years, event) ~ drug, data = pbc_surv_drug, x = TRUE, y = TRUE)
+
+# Ascites
+pbc_surv_ascites <- pbc_surv %>%
+  mutate(ascites = factor(ascites))
+
+cox_ascites <- coxph(Surv(years, event) ~ ascites, data = pbc_surv_ascites, x = TRUE, y = TRUE)
+
+# Hepatomegaly
+pbc_surv_hep <- pbc_surv %>%
+  mutate(hepatomegaly = factor(hepatomegaly))
+
+cox_hep <- coxph(Surv(years, event) ~ hepatomegaly, data = pbc_surv_hep, x = TRUE, y = TRUE)
+
+# Edema
+pbc_surv_edema <- pbc_surv %>%
+  mutate(edema = factor(edema))
+
+cox_edema <- coxph(Surv(years, event) ~ edema, data = pbc_surv_edema, x = TRUE, y = TRUE)
+
+# Histologic
+pbc_surv_hist <- pbc_surv %>%
+  mutate(histologic = factor(histologic))
+
+cox_hist <- coxph(Surv(years, event) ~ histologic, data = pbc_surv_hist, x = TRUE, y = TRUE)
+
+model.coxph.pbc <- c("cox_age","cox_sex","cox_drug","cox_ascites", "cox_hep", "cox_edema", "cox_hist")
+
+aic.coxph <- c(AIC(cox_age, cox_sex, cox_drug, cox_ascites, cox_hep, cox_edema, cox_hist)$AIC)
+
+bic.coxph <- c(BIC(cox_age, cox_sex, cox_drug, cox_ascites, cox_hep, cox_edema, cox_hist)$BIC)
+
+log_Likelihood.coxph <-c(as.numeric(logLik(cox_age)),as.numeric(logLik(cox_sex)),as.numeric(logLik(cox_ascites)),as.numeric(logLik(cox_drug)),as.numeric(logLik(cox_hep)), as.numeric(logLik(cox_edema)), as.numeric(logLik(cox_hist)) )
+
+result_c_coxph <- data.frame(
+  model.coxph.pbc,
+  AIC = aic.coxph,
+  BIC = bic.coxph,
+  logLik = log_Likelihood.coxph
+)
+knitr::kable(result_c_coxph, caption = "Table 3.2.1(b) Comparison of cox ph model on single covariate")
+
+```
+
+In Table 3.2.1(b), there is a comparison of the cox proportional hazard models using AIC, BIC, and log-likelihood criteria, the model including edema as a covariate shows the best performance. It yields the lowest AIC (1400.724) and BIC (1406.608) values, along with the highest log-likelihood (-698.3622, indicating that this model provides the best fit to the data among the competing models.
+
+```{r echo=FALSE}
+sjPlot::tab_model(cox_pbc_full, cox_edema,
+                  title = "Table 3.2.1(c) Comparison of cox full model and parsimonious cox model result")
+```
+
+In Table 3.2.1(c), The full model and the model including only the edema covariate is compared and the results show that the full model fits the data better with higher R^2 value.
+
+### LME model 
+
+```{r echo=FALSE}
+model_full <- nlme::lme(
+  log(serBilir) ~ year + sex + age + drug + ascites + hepatomegaly + edema + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim"))
+tidy(model_full)|>
+  kable(caption = "Table 3.2.1(a) Linear mixed effect model with full covariates in PBC dataset")
+```
+
+In Table 3.2.2(a), a linear mixed-effects model with full covariates indicates that time (year) has a strong and statistically significant positive effect on the outcome, suggesting that the response increases over time. Among the covariates, clinical indicators of disease severity, including ascites, hepatomegaly, and edema, are statistically significant, indicating that these conditions are associated with higher values of the longitudinal outcome. In particular, the effect of edema appears stronger in more severe cases, suggesting a graded relationship.
+
+In contrast, demographic variables such as sex and age, as well as treatment with D-penicillamine, are not statistically significant, indicating limited evidence of their association with the outcome. Similarly, most histologic stages are not significant, except for stage 4, which shows a significant positive effect, suggesting that only advanced disease stage is associated with higher outcome levels.
+
+The random effects structure shows substantial variability in both baseline levels and rates of change across individuals, supporting the inclusion of both random intercepts and slopes in the model.
+
+```{r echo=FALSE}
+library(performance)
+check_collinearity(model_full) |>
+  kable(caption = "Table 3.2.2(b) Collinearity in linear mixed model with full covariates")
+```
+
+In Table 3.2.2(b), it suggests that low correlation, suggesting that multicollinearity is not a major concern in this dataset.
+
+```{r echo=FALSE}
+library(nlme)
+
+model_year <- nlme::lme(
+  log(serBilir) ~ year,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+
+model_sex <- nlme::lme(
+  log(serBilir) ~ year + sex,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+
+```
+
+```{r echo=FALSE}
+model_age <- nlme::lme(
+  log(serBilir) ~ year + age,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+```
+
+```{r echo=FALSE}
+model_drug <- nlme::lme(
+  log(serBilir) ~ year + drug,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+```
+
+
+```{r echo=FALSE}
+model_ascites <- nlme::lme(
+  log(serBilir) ~ year + ascites,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+```
+
+
+```{r echo=FALSE}
+model_hepatomegaly <- nlme::lme(
+  log(serBilir) ~ year + hepatomegaly,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+```
+
+
+```{r echo=FALSE}
+model_edema <- nlme::lme(
+  log(serBilir) ~ year + edema,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+```
+
+
+```{r echo=FALSE}
+model_histologic <- nlme::lme(
+  log(serBilir) ~ year + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+```
+
+
+```{r echo=FALSE}
+model.lme.pbc <- c("model_year", "model_age", "model_sex", "model_ascites", "model_drug", "model_edema", "model_hepatomegaly", "model_histologic")
+
+aic.lme <- c(AIC(model_year, model_age, model_sex, model_ascites, model_drug, model_edema, model_hepatomegaly, model_histologic)$AIC)
+
+bic.lme <- c(BIC(model_year, model_age, model_sex, model_ascites, model_drug, model_edema, model_hepatomegaly, model_histologic)$BIC)
+
+log_Likelihood.lme <-c(as.numeric(logLik(model_year)),as.numeric(logLik(model_age)),as.numeric(logLik(model_sex)),as.numeric(logLik(model_ascites)),as.numeric(logLik(model_drug)), as.numeric(logLik(model_edema)), as.numeric(logLik(model_hepatomegaly)), as.numeric(logLik(model_histologic)))
+
+result_c_lme <- data.frame(
+  model.lme.pbc,
+  AIC = aic.lme,
+  BIC = bic.lme,
+  logLik = log_Likelihood.lme
+)
+knitr::kable(result_c_lme, caption = "Table 3.2.2(c) Comparison of lme model on single covariate")
+
+```
+
+From Table 3.2.2(c) it can be concluded that model_ascites is the best model with AIC of 2816.177, BIC of 2854.957	and log likelihood of -1401.088
+
+### Joint model 
+Joint Model with full models
+```{r echo=FALSE}
+library(JMbayes2)
+jointFit_full <- jm(
+  Mixed_objects = list(model_full),               
+  Surv_object = cox_pbc_full,                 
+  time_var = "year",                          
+  id_var = "id"
+)
+
+sumJM_full <- summary(jointFit_full)$Outcome1
+
+sumJM_full |>
+  knitr::kable(
+    caption = "Table 3.2.3(a) Summary of joint models with full models",
+    booktabs = TRUE,
+    digits = 3
+  )
+coef(jointFit_full)$association
+```
+
+In table 3.2.3(a) it is shown that the joint model links the longitudinal evolution of log(serum bilirubin) with survival through the posterior mean of the association parameter value of 1.320284  indicates a positive relationship between the longitudinal process and the hazard of the event.This parameter quantifies the effect of the underlying true biomarker value on the hazard of death. A one-unit increase in the biomarker corresponds to approximately a 3.7-fold increase in the hazard.
+
+This means that as liver function deteriorates over time (reflected by increasing bilirubin), the risk of death increases dynamically. Therefore, survival is not only influenced by baseline covariates but also by the patient’s evolving disease trajectory.
+
+```{r echo=FALSE}
+jointFit_pars <- jm(
+  Mixed_objects = list(model_ascites),               
+  Surv_object = cox_edema,                 
+  time_var = "year",                          
+  id_var = "id"
+)
+
+sumJM_pars <- summary(jointFit_pars)$Outcome1
+
+sumJM_pars |>
+  knitr::kable(
+    caption = "Table 3.2.3(b) Summary of joint models with parsimonious models",
+    booktabs = TRUE,
+    digits = 3
+  )
+
+coef(jointFit_pars)$association
+```
+
+The table 3.2.3(b) shows that the joint model with a parsimonious linear mixed effects model and cox proportional hazards model. The posterior mean (α = 1.20) suggests a strong positive association, with approximately a 3.3-fold increase in hazard per unit increase in the longitudinal outcome.
+
+```{r}
+compare_jm_res <- compare_jm(jointFit_full, jointFit_pars)
+knitr::kable(compare_jm_res$table,
+             caption = "Table 3.2.3(c) Comparison of Joint Models")
+```
+
+From Table 3.2.3(c), we can conclude that jointFit_pars is the better model beacuse it has lower DIC and WAIC and higher LPML.
+The joint modelling framework provides important advantages over separate longitudinal and survival models. It accounts for the dependence between the biomarker process and survival outcome, incorporates measurement error in the longitudinal biomarker, and reduces bias due to informative dropout, where patients with worse health are more likely to experience the event earlier. By modelling both processes simultaneously, joint models provide more accurate and clinically meaningful estimates of disease progression and mortality risk.
+
+
+### Dynamic prediction
+
+```{r echo=FALSE}
+library(patchwork)
+library(tidyr)
+set.seed(123)
+patients_selection <- pbc %>%
+  group_by(id) %>%
+  filter(n() >= 4) %>%
+  filter(all(complete.cases(ascites, hepatomegaly, edema, histologic))) %>%
+  ungroup()
+
+ids_pred <- sample(unique(patients_selection$id), size = 3)
+
+plots <- vector("list", length(ids_pred))
+
+for (i in seq_along(ids_pred)) {
+  id_i <- ids_pred[i]
+  
+  nd_long <- pbc %>%
+    filter(id == id_i) %>%
+    arrange(year) %>%
+    drop_na(ascites, hepatomegaly, edema, histologic)
+  
+  t_star <- max(nd_long$year, na.rm = TRUE)
+  
+  nd_surv <- pbc_surv %>%
+    filter(id == id_i) %>%
+    mutate(years = t_star, event = 0) %>%
+    drop_na(age, ascites, hepatomegaly, edema, histologic)
+  
+  dp <- predict(
+    jointFit_pars,
+    newdata = list(newdataL = nd_long, newdataE = nd_surv),
+    process = "event",
+    return_newdata = TRUE,
+    times = seq(t_star, t_star + 5, by = 0.25)
+  )
+  
+  # detect time column (JMbayes2 returns 'times' not 'year')
+  time_col <- if ("times" %in% names(dp)) "times" else "year"
+  
+  # ── top panel: longitudinal biomarker trajectory ──
+  g_long <- ggplot(nd_long, aes(x = year, y = log(serBilir))) +
+    geom_point(colour = "darkred", size = 2) +
+    geom_line(colour = "darkred", linewidth = 0.8) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    labs(
+      title = paste0("Subject ", id_i),
+      x     = NULL,
+      y     = "log(serBilir)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title       = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+  
+  g_surv <- ggplot(dp, aes(x = .data[[time_col]], y = 1 - pred_CIF)) +
+    geom_ribbon(aes(ymin = 1 - upp_CIF, ymax = 1 - low_CIF),
+                fill = "steelblue", alpha = 0.3) +
+    geom_line(colour = "steelblue", linewidth = 1) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    annotate("text", x = t_star, y = 0.05,
+             label  = paste0("t* = ", round(t_star, 2)),
+             hjust  = -0.1, size = 3.5, colour = "grey40") +
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+    labs(x = "Time (years)", y = "Survival Probability") +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+  
+  plots[[i]] <- g_long / g_surv + plot_layout(heights = c(1, 1.5))
+}
+
+(plots[[1]] | plots[[2]] | plots[[3]]) +
+  plot_annotation(
+    title = "Figure 3.2.4(a) Dynamic Survival Predictions for Selected PBC Patients using the Parsimonious Joint Model",
+    theme = theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5))
+  )
+```
+
+Figure 3.2.4(a) displays subject-specific dynamic survival predictions from the parsimonious joint model for subject IDs 282, 29, and 309. Overall, survival probabilities remain high across the prediction horizon for all three subjects, suggesting a relatively low predicted risk of the event within the 5-year window. Subject 29, with the longest landmark time of approximately 11.86 years, maintains a near-constant survival probability, reflecting that patients who have survived this long tend to have a more stable prognosis. Subjects 282 and 309 similarly show high and stable survival curves, with only a marginal decline over time. The dashed vertical line marks the landmark time t* from which predictions are made conditionally on each subject's observed longitudinal history, and the shaded bands represent 95% credible intervals.
+
+```{r}
+library(patchwork)
+#With Full Model
+set.seed(123)
+patients_selection <- pbc %>%
+  group_by(id) %>%
+  filter(n() >= 4) %>%
+  filter(all(complete.cases(ascites, hepatomegaly, edema, histologic))) %>%
+  ungroup()
+
+ids_pred <- sample(unique(patients_selection$id), size = 3)
+
+plots <- vector("list", length(ids_pred))
+
+for (i in seq_along(ids_pred)) {
+  id_i <- ids_pred[i]
+  
+  nd_long <- pbc %>%
+    filter(id == id_i) %>%
+    arrange(year) %>%
+    drop_na(ascites, hepatomegaly, edema, histologic)
+  
+  t_star <- max(nd_long$year, na.rm = TRUE)
+  
+  nd_surv <- pbc_surv %>%
+    filter(id == id_i) %>%
+    mutate(years = t_star, event = 0) %>%
+    drop_na(age, ascites, hepatomegaly, edema, histologic)
+  
+  dp <- predict(
+    jointFit_full,
+    newdata = list(newdataL = nd_long, newdataE = nd_surv),
+    process = "event",
+    return_newdata = TRUE,
+    times = seq(t_star, t_star + 5, by = 0.25)
+  )
+  
+
+  time_col <- if ("times" %in% names(dp)) "times" else "year"
+  
+  
+  g_long <- ggplot(nd_long, aes(x = year, y = log(serBilir))) +
+    geom_point(colour = "darkred", size = 2) +
+    geom_line(colour = "darkred", linewidth = 0.8) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    labs(
+      title = paste0("Subject ", id_i),
+      x     = NULL,
+      y     = "log(serBilir)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title       = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+  
+  g_surv <- ggplot(dp, aes(x = .data[[time_col]], y = 1 - pred_CIF)) +
+    geom_ribbon(aes(ymin = 1 - upp_CIF, ymax = 1 - low_CIF),
+                fill = "steelblue", alpha = 0.3) +
+    geom_line(colour = "steelblue", linewidth = 1) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    annotate("text", x = t_star, y = 0.05,
+             label  = paste0("t* = ", round(t_star, 2)),
+             hjust  = -0.1, size = 3.5, colour = "grey40") +
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+    labs(x = "Time (years)", y = "Survival Probability") +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+  
+  plots[[i]] <- g_long / g_surv + plot_layout(heights = c(1, 1.5))
+}
+
+(plots[[1]] | plots[[2]] | plots[[3]]) +
+  plot_annotation(
+    title = "Figure 3.2.4(b) Dynamic Survival Predictions for Selected PBC Patients using the Full Joint Model",
+    theme = theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5))
+  )
+```
+
+Figure 3.2.4(b) displays subject-specific dynamic survival predictions from the full joint model for subject IDs 282, 29, and 309. Overall, the pattern is very similar to the parsimonious model in Figure 3.2.4(a), with all three subjects maintaining high survival probabilities across the prediction horizon, suggesting a low predicted risk of the event. Subject 29, with the longest landmark time of approximately 11.86 years, shows a near-constant survival curve, consistent with long-term survivors having a more stable prognosis. Subjects 282 and 309 similarly exhibit high and relatively flat survival curves with only marginal decline over time. Comparing the two models, the full and parsimonious joint models produce largely consistent dynamic survival predictions for these three subjects, suggesting that the variable selection in the parsimonious model did not substantially alter individual-level predictions.
+
+
+
+```{r echo=FALSE}
+
+pbc_long_clean <- pbc %>%
+  drop_na(year, serBilir, ascites, hepatomegaly, edema, histologic)
+
+pbc_surv_clean <- pbc2.id %>%
+  mutate(
+    id           = as.integer(id),
+    event        = as.integer(status2 != 0),
+    sex          = factor(sex, labels = c("Female", "Male")),
+    drug         = factor(drug),
+    ascites      = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema        = factor(edema),
+    histologic   = factor(histologic)
+  ) %>%
+  drop_na(age, ascites, hepatomegaly, edema, histologic)
+
+common_ids     <- intersect(unique(pbc_long_clean$id), unique(pbc_surv_clean$id))
+pbc_long_clean <- pbc_long_clean %>% filter(id %in% common_ids)
+pbc_surv_clean <- pbc_surv_clean %>% filter(id %in% common_ids)
+
+cat("Longitudinal subjects:", length(unique(pbc_long_clean$id)), "\n")
+cat("Survival subjects:    ", length(unique(pbc_surv_clean$id)), "\n")
+
+pbc_tv <- pbc_long_clean %>%
+  dplyr::select(-any_of(c("years", "event", "status", "status2"))) %>%
+  dplyr::left_join(
+    pbc_surv_clean %>% dplyr::select(id, years, event),
+    by = "id"
+  )
+
+cat("Columns in pbc_tv:\n")
+print(names(pbc_tv))
+stopifnot(all(c("id", "year", "years", "event") %in% names(pbc_tv)))
+
+roc_res <- tvROC(
+  jointFit_pars,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1
+)
+
+sensitivity <- roc_res$nTP / (roc_res$nTP + roc_res$nFN)
+specificity  <- roc_res$nTN / (roc_res$nTN + roc_res$nFP)
+
+landmark_times <- c(0, 1, 2, 3, 4, 5)
+auc_df <- data.frame(
+  landmark = landmark_times,
+  auc = NA_real_
+)
+
+for (i in seq_along(landmark_times)) {
+  tmp <- tvAUC(
+    jointFit_pars,
+    newdata = pbc_tv,
+    Tstart = landmark_times[i],
+    Dt = 1
+  )
+  auc_df$auc[i] <- as.numeric(tmp$auc)
+}
+print(auc_df)
+
+roc_df <- data.frame(
+  FPR       = 1 - specificity,
+  TPR       = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  arrange(FPR, TPR)
+
+
+p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc_df$auc[auc_df$landmark == 0], 3)),  # ← fixed
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    title    = "ROC curve — joint model",
+    subtitle = "Landmark: 0 years | Horizon: 1 year",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+p_auc <- ggplot(auc_df, aes(x = landmark, y = auc)) +
+  geom_line(colour = "#2166AC", linewidth = 1) +
+  geom_point(colour = "#2166AC", size = 3) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(
+    title    = "Time-dependent AUC — joint model",
+    subtitle = "Prediction horizon: 1 year",
+    x        = "Landmark time (years)",
+    y        = "AUC"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+(p_roc | p_auc) +
+  plot_annotation(
+    title = "Figure 3.2.4(c) ROC Curve and AUC Curve of Parsimonious Joint Model",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0.5)
+    )
+  )
+```
+
+Figure 3.2.4(c) presents the ROC curve and time-dependent AUC of the parsimonious joint model. The ROC curve at landmark time 0 yields an AUC of 0.906, indicating excellent discriminative ability. The time-dependent AUC remains consistently above 0.5 across all landmark times, though it shows a slight decline at later landmark times, suggesting the model maintains good but slightly decreasing discrimination over time.
+
+```{r}
+pbc_long_clean <- pbc %>%
+  drop_na(year, serBilir, ascites, hepatomegaly, edema, histologic)
+
+pbc_surv_clean <- pbc2.id %>%
+  mutate(
+    id           = as.integer(id),
+    event        = as.integer(status2 != 0),
+    sex          = factor(sex, labels = c("Female", "Male")),
+    drug         = factor(drug),
+    ascites      = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema        = factor(edema),
+    histologic   = factor(histologic)
+  ) %>%
+  drop_na(age, ascites, hepatomegaly, edema, histologic)
+
+common_ids     <- intersect(unique(pbc_long_clean$id), unique(pbc_surv_clean$id))
+pbc_long_clean <- pbc_long_clean %>% filter(id %in% common_ids)
+pbc_surv_clean <- pbc_surv_clean %>% filter(id %in% common_ids)
+
+cat("Longitudinal subjects:", length(unique(pbc_long_clean$id)), "\n")
+cat("Survival subjects:    ", length(unique(pbc_surv_clean$id)), "\n")
+
+pbc_tv <- pbc_long_clean %>%
+  dplyr::select(-any_of(c("years", "event", "status", "status2"))) %>%
+  dplyr::left_join(
+    pbc_surv_clean %>% dplyr::select(id, years, event),
+    by = "id"
+  )
+
+cat("Columns in pbc_tv:\n")
+print(names(pbc_tv))
+stopifnot(all(c("id", "year", "years", "event") %in% names(pbc_tv)))
+
+roc_res <- tvROC(
+  jointFit_full,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1
+)
+
+sensitivity <- roc_res$nTP / (roc_res$nTP + roc_res$nFN)
+specificity  <- roc_res$nTN / (roc_res$nTN + roc_res$nFP)
+
+landmark_times <- c(0, 1, 2, 3, 4, 5)
+auc_df <- data.frame(
+  landmark = landmark_times,
+  auc = NA_real_
+)
+
+for (i in seq_along(landmark_times)) {
+  tmp <- tvAUC(
+    jointFit_full,
+    newdata = pbc_tv,
+    Tstart = landmark_times[i],
+    Dt = 1
+  )
+  auc_df$auc[i] <- as.numeric(tmp$auc)
+}
+print(auc_df)
+
+roc_df <- data.frame(
+  FPR       = 1 - specificity,
+  TPR       = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  arrange(FPR, TPR)
+
+
+p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc_df$auc[auc_df$landmark == 0], 3)),  # ← fixed
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    title    = "ROC curve — joint model",
+    subtitle = "Landmark: 0 years | Horizon: 1 year",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+p_auc <- ggplot(auc_df, aes(x = landmark, y = auc)) +
+  geom_line(colour = "#2166AC", linewidth = 1) +
+  geom_point(colour = "#2166AC", size = 3) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(
+    title    = "Time-dependent AUC — joint model",
+    subtitle = "Prediction horizon: 1 year",
+    x        = "Landmark time (years)",
+    y        = "AUC"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+(p_roc | p_auc) +
+  plot_annotation(
+    title = "Figure 3.2.4(d) ROC Curve and AUC Curve of Full Joint Model",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0.5)
+    )
+  )
+```
+
+Figure 3.2.4(d) presents the ROC curve and time-dependent AUC of the full joint model. The ROC curve at landmark time 0 yields a marginally higher AUC of 0.919 compared to the parsimonious model. The time-dependent AUC similarly remains well above 0.5 across landmark times but shows a more pronounced decline at landmark times 4 and 5, suggesting some reduction in discriminative performance at longer follow-up times. Overall, both models demonstrate strong discrimination, with the full model showing a slight advantage at earlier landmark times.
+
+
+```{r}
+landmark_times <- c(0, 1, 2, 3, 4, 5)
+brier_pars <- data.frame(landmark = landmark_times, brier = NA_real_)
+brier_full <- data.frame(landmark = landmark_times, brier = NA_real_)
+
+for (i in seq_along(landmark_times)) {
+  tmp_pars <- tvBrier(
+    jointFit_pars,
+    newdata  = pbc_tv,
+    Tstart   = landmark_times[i],
+    Dt       = 1
+  )
+  brier_pars$brier[i] <- as.numeric(tmp_pars$Brier)
+  
+  tmp_full <- tvBrier(
+    jointFit_full,
+    newdata  = pbc_tv,
+    Tstart   = landmark_times[i],
+    Dt       = 1
+  )
+  brier_full$brier[i] <- as.numeric(tmp_full$Brier)
+}
+
+brier_combined <- rbind(
+  data.frame(brier_pars, model = "Parsimonious"),
+  data.frame(brier_full, model = "Full")
+)
+
+
+brier_combined %>%
+  mutate(brier = round(brier, 4)) %>%
+  tidyr::pivot_wider(names_from = model, values_from = brier) %>%
+  kable(
+    caption  = "Table 3.2.4(a): Time-dependent Brier Scores for Parsimonious and Full Joint Models (Prediction Horizon: 1 Year)",
+    col.names = c("Landmark Time (years)", "Full", "Parsimonious"),
+    align    = "c")
+
+p_brier <- ggplot(brier_combined, aes(x = landmark, y = brier,
+                                       colour = model, shape = model)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", colour = "grey50") +
+  scale_colour_manual(values = c("Parsimonious" = "#2166AC", "Full" = "#D6604D")) +
+  scale_y_continuous(limits = c(0, 0.30), breaks = seq(0, 0.30, 0.05)) +
+  labs(
+    title    = "Figure 3.2.4(e): Time-dependent Brier Score",
+    subtitle = "Prediction horizon: 1 year",
+    x        = "Landmark time (years)",
+    y        = "Brier Score",
+    colour   = "Model",
+    shape    = "Model"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+
+print(p_brier)
+
+par(mfrow = c(1, 2), oma = c(0, 0, 3, 0)) 
+
+calibration_plot(
+  jointFit_pars,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  main    = "Parsimonious Model\nLandmark: 0 | Horizon: 1 year",
+  col     = "#2166AC",
+  col_CI  = "#BDD7E7"
+)
+
+calibration_plot(
+  jointFit_full,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  main    = "Full Model\nLandmark: 0 | Horizon: 1 year",
+  col     = "#D6604D",
+  col_CI  = "#FCBBA1"
+)
+
+mtext(
+  "Figure 3.2.4 (f): Calibration Curves for Parsimonious and Full Joint Models",
+  outer = TRUE, cex = 1.1, font = 2, line = 1
+)
+
+par(mfrow = c(1, 1))
+
+cal_metrics_pars <- calibration_metrics(
+  jointFit_pars,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1
+)
+
+cal_metrics_full <- calibration_metrics(
+  jointFit_full,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1
+)
+
+print(cal_metrics_pars)
+print(cal_metrics_full)
+
+```
+
+From Table 3.2.4(a) and Figure 3.2.4(e), both the parsimonious and full joint models demonstrate good predictive accuracy, with Brier scores remaining well below the 0.25 no-information threshold across all landmark times. The parsimonious model yields slightly lower Brier scores at most landmark times, most notably at landmark time 2 (0.0862 vs 0.0556), suggesting marginally better overall predictive performance compared to the full model. Both models show a small peak in Brier score around landmark time 2–3, indicating slightly reduced predictive accuracy at mid-follow-up, before stabilising at later landmark times.
+
+Figure 3.2.4(f) displays the calibration curves for both models at landmark time 0 with a 1-year prediction horizon. The parsimonious model shows better calibration, with the observed probabilities tracking closer to the diagonal reference line across the range of predicted probabilities. The full model shows a wider credible interval band and a more pronounced deviation from the diagonal, particularly at higher predicted probabilities, suggesting slight overestimation of event risk in that region. The calibration metrics support this, with the parsimonious model showing a lower ICI (0.0142) compared to the full model (0.0225), confirming better mean calibration accuracy.
+
+
+## MIMIC dataset - subset
+
+```{r}
+lab_events<- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/labevents.csv")
+lab_items<- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/d_labitems.csv")
+patients <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/patients.csv")
+icu_stays <- read.csv("mimic-iv-clinical-database-demo-2.2/icu/icustays.csv")
+prescriptions <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/prescriptions.csv")
+
+biomarkers <- left_join(lab_events,lab_items,by="itemid")
+
+d_items <- read.csv("mimic-iv-clinical-database-demo-2.2/icu/d_items.csv")
+date_time_event <- read.csv("mimic-iv-clinical-database-demo-2.2/icu/datetimeevents.csv")
+
+admission <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/admissions.csv")
+
+diagnoses_icd <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/diagnoses_icd.csv")
+
+
+biomarkers <- left_join(lab_events,lab_items,by="itemid")
+icu_patient <- left_join(icu_stays,patients,by="subject_id")
+admission_patient <- left_join(admission,patients,by="subject_id")
+date_time_item <- left_join(date_time_event,d_items,by="itemid")
+
+potassium_df <- biomarkers %>%
+  filter(label=="Potassium")%>%
+  mutate(
+    storetime = strptime(storetime, "%Y-%m-%d %H:%M:%S"),
+    charttime = strptime(charttime, "%Y-%m-%d %H:%M:%S")
+  )%>% 
+  arrange(subject_id,storetime)%>%
+  group_by(subject_id)%>%
+  mutate(
+  event_num =  seq_along(storetime))
+
+
+#check the death and non-death
+icu_patient <- icu_patient%>%
+ arrange(subject_id)%>%
+ distinct(subject_id,.keep_all = TRUE)%>%
+ mutate(
+  dod = ifelse(dod=="",NA,dod))
+
+#check the death of individuals death before and after discharge from ICU 
+icu_patient_df <-icu_patient%>%
+mutate(
+  outtime = strptime(outtime, "%Y-%m-%d %H:%M:%S"),
+  dod = strptime(dod, "%Y-%m-%d"),
+  death_before = ifelse(dod<outtime,1,0))
+
+# Keep only patients death_before discharge and alive 
+icu_patient_df <- icu_patient_df%>%
+  filter(is.na(death_before)|death_before==1)
+
+# join with the biomarker sub df
+biomarkersP_icu <- left_join(icu_patient_df,potassium_df,by=c("subject_id","hadm_id"))
+
+# calculate the time collection of biomarkers
+biomarkersP_icu <- biomarkersP_icu%>%
+  group_by(subject_id) %>%
+  mutate(
+  time_c = as.numeric(difftime(charttime, min(charttime), units = "days"))
+  )%>%
+  ungroup()
+
+
+# filter baseline diseases
+diagnoses_icd <- diagnoses_icd %>%
+  arrange(subject_id,seq_num)
+
+# check for chronic kidney disease 
+# 5859		Chronic kidney disease, unspecified
+# 5851		Chronic kidney disease, Stage I
+# 5852		Chronic kidney disease, Stage II (mild)
+# 5853		Chronic kidney disease, Stage III (moderate)
+# 5854		Chronic kidney disease, Stage IV (severe)
+# 5855		Chronic kidney disease, Stage V
+
+icd_chronic_kidney <- diagnoses_icd%>%
+  filter(icd_code %in% c("5859","5851","5852","5853","5854","5855")) %>%
+  filter(subject_id %in% biomarkersP_icu$subject_id) %>%
+  distinct(subject_id,icd_code) 
+  
+# add in covariate chronic_kidney_disease
+biomarkersP_icu <- biomarkersP_icu%>%
+  mutate(
+    chronic_kidney_disease = if_else(
+      subject_id %in% icd_chronic_kidney$subject_id,
+      1, 0
+    )
+  )
+
+# add in covariate hypertension
+icd_hypertension <- diagnoses_icd%>%
+  filter(icd_code =="I10")%>%
+  filter(subject_id %in% biomarkersP_icu$subject_id)%>%
+  distinct(subject_id)
+
+# add in covariate hypertension
+biomarkersP_icu <- biomarkersP_icu%>%
+  mutate(
+    hypertension = if_else(
+      subject_id %in% icd_hypertension$subject_id,
+      1, 0
+    )
+  )
+
+# add in covariate drug heparin
+prec_heparin <- prescriptions%>%
+  filter(drug=="Heparin")%>%
+  filter(subject_id %in% biomarkersP_icu$subject_id)%>%
+  distinct(subject_id)
+
+# new code : 
+# calculate time of alive using discharge time - admittime from admission table 
+admission_patient <- admission_patient%>%
+  mutate(
+    subject_id = as.character(subject_id),
+    Time_alive =  as.numeric(difftime(dischtime, admittime, units = "days"))
+  )
+
+biomarkersP_icu <- biomarkersP_icu%>%
+  mutate(
+    drug_heparin = if_else(
+      subject_id %in% prec_heparin$subject_id,
+      1, 0
+    )
+  )
+
+biomarkersP_icu_clean <- biomarkersP_icu%>%
+  mutate(
+    subject_id= as.character(subject_id),
+    death_event = ifelse(is.na(death_before),0,1),
+  )%>%
+  dplyr::select(subject_id,gender,anchor_age,valuenum,time_c,storetime,hypertension,chronic_kidney_disease,drug_heparin,death_event)
+
+#left join
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  left_join(
+    admission_patient %>% 
+      dplyr::select(subject_id, Time_alive),
+    by = "subject_id"
+  )
+
+biomarkersP_icu_clean <- na.omit(biomarkersP_icu_clean)
+```
+
+```{r}
+table1(~time_c+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin|death_event,data=biomarkersP_icu_clean,caption="Baseline characteristic of MIMIC-IV dataset(subset) by death status")
+```
+\FloatBarrier
+
+
+Based on Table 25, it shows that subset of MIMIC dataset contains a total of 834 observations of potassium counts from 78 individuals, with varying follow-up periods from baseline up to the 18th month. The dataset includes several covariates: gender,age, hypertension,chronic kidney disease and drug heparin. 
+
+\FloatBarrier
+
+```{r fig.cap="Potassium count trajectories over time",fig.width = 4,fig.height = 3,out.width = "60%",fig.pos="H"}
+
+mimic_long <- ggplot(data=biomarkersP_icu_clean,
+       aes(x=time_c,y=valuenum,group=subject_id))+geom_line()+
+       stat_smooth(aes(group=1), se=TRUE, method="loess",linewidth = 1)+theme_bw()+
+  labs(
+    x="Time (days)",
+    y ="log(potassium)",
+    title="Biomarkers-Potassium count on each individual over days"
+    )
+
+mimic_long
+```
+
+Based on Figure 6,the spaghetti plot shows substantial variability between patients. The LOESS smooth indicates a slightly decreasing trend in potassium count across the cohort, suggesting that potassium counts decline gradually over time. Fewer trajectories are observed after day 10, suggesting possible loss to follow-up.
+
+
+
+```{r fig.pos="H",fig.cap="Kaplan Meier Survival Curve on baseline CD4 tertiles",out.width="60%"}
+biomarkersP_surv <- biomarkersP_icu_clean%>%
+  distinct(subject_id,Time_alive,death_event)
+
+biomarkersP_base <- biomarkersP_icu_clean %>%
+  group_by(subject_id) %>%
+  arrange(Time_alive, .by_group = TRUE) %>%
+  dplyr::slice(1) %>%                     # baseline record per subject
+  ungroup() %>%
+  mutate(
+    p_grp = ntile(valuenum, 2),
+    p_grp = factor(p_grp, labels = c("Low","High"))
+  )
+
+biomarkersP_cov <- biomarkersP_icu_clean%>%
+  group_by(subject_id) %>%
+  dplyr::slice(1) %>%                     # baseline covariates per subject
+  ungroup() %>%
+  select(subject_id, gender,anchor_age, hypertension, chronic_kidney_disease,drug_heparin)
+
+km_biomarkersP_df <- biomarkersP_surv%>%
+  left_join(biomarkersP_base%>%select(subject_id,p_grp),by="subject_id")%>%
+  left_join(biomarkersP_cov,by="subject_id")%>%
+  filter(!is.na(p_grp))
+
+# KM by Baseline Potassium
+fit_km_potassium <- survfit(Surv(Time_alive,death_event)~p_grp,data=km_biomarkersP_df)
+ggsurvplot(
+  fit_km_potassium,data=km_biomarkersP_df,risk.table = TRUE,
+  risk.table.height = 0.30,  
+  risk.table.fontsize = 4,
+  ggtheme=theme_minimal(),
+  legend.title="Baseline Potassium Level"
+)
+```
+
+
+
+### Cox Proportional Hazard model
+```{r}
+cox_icu_full <- coxph(
+  Surv(Time_alive, death_event) ~ chronic_kidney_disease + anchor_age + gender +
+    hypertension + drug_heparin,
+  data = km_biomarkersP_df,
+  x = TRUE, y = TRUE
+)
+#summary(cox_icu_full)
+```
+
+
+### Linear Mixed Effect model
+
+```{r}
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  dplyr::mutate(
+    gender = factor(gender),
+    hypertension = factor(hypertension),
+    chronic_kidney_disease = factor(chronic_kidney_disease),
+    drug_heparin = factor(drug_heparin),
+    subject_id = factor(subject_id),
+    log_value = log(valuenum)
+  )
+
+lme.mimic.full<- nlme::lme(
+  fixed=log_value~time_c+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full)
+
+lme.mimic.full_quad<- nlme::lme(
+  fixed=log_value~time_c+I(time_c^2)+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full_quad)
+
+lme.mimic.full_cub<- nlme::lme(
+  fixed=log_value~time_c+I(time_c^2)+I(time_c^3)+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full_cub)
+
+lme.mimic.full_quar<- nlme::lme(
+  fixed=log_value~time_c+I(time_c^2)+I(time_c^3)+I(time_c^4)+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full_quar)
+
+lme.mimic.full_ml <- update(lme.mimic.full, method = "ML")
+lme.mimic.full_quad_ml <- update(lme.mimic.full_quad, method = "ML")
+lme.mimic.full_cub_ml <- update(lme.mimic.full_cub, method = "ML")
+lme.mimic.full_quar_ml <- update(lme.mimic.full_quar, method = "ML")
+
+res <- anova(
+  lme.mimic.full_ml,
+  lme.mimic.full_quad_ml,
+  lme.mimic.full_cub_ml,
+  lme.mimic.full_quar_ml
+)
+
+
+res_df <- as.data.frame(res)
+res_df$`p-value` <- ifelse(
+  res_df$`p-value` < 0.001,
+  "<0.001",
+  sprintf("%.4f", res_df$`p-value`)
+)
+res_df <- res_df %>% select(-call)
+
+knitr::kable(res_df, caption = "ANOVA Comparison non linear trajectories of the biomarkers",digits = 3) 
+  
+
+```
+
+Based on Table 26, the sequential likelihood ratio tests compared consecutive nested models. The comparison between the linear and quadratic models showed a statistically significant improvement in model fit (p < 0.001), indicating that the inclusion of a quadratic time term better captured the longitudinal trajectories of the biomarkers over time. Furthermore, the comparison between the quadratic and cubic models also demonstrated a statistically significant improvement in model fit (p < 0.001), suggesting that the addition of a cubic time term further improved the representation of biomarker trajectories. Although the inclusion of a quartic time term remained statistically significant (p = 0.0039), it resulted in only a minimal improvement in log-likelihood and BIC compared to the substantial gains observed in earlier model expansions.
+
+Overall, these findings indicate that the cubic model is sufficient to characterize the biomarker trajectories over time. The relationship between biomarker levels and time is clearly nonlinear and cannot be adequately described by a simple linear trend.
+
+
+
+## Joint model - JMbayes2 Package
+```{r}
+# scale the biomarkers for better conversion in MIMIC 
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  mutate(log_value_sc = as.numeric(scale(log_value)))
+
+# use spline in modelling non linear trajectories
+lme.mimic.full_spline <- nlme::lme(
+  fixed = log_value_sc ~ ns(time_c, df = 3) +
+    gender + anchor_age +
+    hypertension + chronic_kidney_disease + drug_heparin,
+    random = ~ time_c | subject_id, 
+  data = biomarkersP_icu_clean,
+  method = "REML"
+)
+
+jointFit_MIMIC1 <- JMbayes2::jm(
+  Mixed_objects = list(lme.mimic.full_spline),               
+  Surv_object = cox_icu_full,
+  time_var = "time_c",                          
+  id_var = "subject_id",
+  n_iter = 30000,
+  n_burnin = 5000
+)
+
+```
+
+```{r}
+sumJM_MIMIC_full1 <- summary(jointFit_MIMIC1)$Outcome1
+
+sumJM_MIMIC_full1 |>
+  as.data.frame() |>
+transform(
+  `P` = {
+    pvals <- as.numeric(as.character(`P`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  knitr::kable(
+    caption = "Summary of joint models on MIMIC dataset with full covariates(longitudinal)",
+    booktabs = TRUE,
+    digits = 3
+  )
+```
+
+To improve model convergence, time is modelled using a natural cubic spline (df = 3) and the log biomarker was standardised. This resulted in better MCMC convergence and more stable parameter estimates.In Table 27 shows the summary of joint models with full covariates on longitudinal part. Male gender showed a borderline association with the longitudinal biomarker trajectory (p = 0.055), suggesting a potential effect but not reaching conventional statistical significance.. It also suggests that estimate value of sigma (within patient variability) is 0.620, and the credible interval between 0.602 and 0.637, suggesting moderate level of within-subject variability in the longitudinal biomarker measurements after accounting for fixed and random effects.
+
+
+
+```{r}
+sumJM_MIMIC_full1_surv <- summary(jointFit_MIMIC1)$Survival
+
+sumJM_MIMIC_full1_surv |>
+  as.data.frame() |>
+transform(
+  `P` = {
+    pvals <- as.numeric(as.character(`P`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  knitr::kable(
+    caption = "Summary of joint models on MIMIC dataset with full covariates(survival)",
+    booktabs = TRUE,
+    digits = 3
+  )
+```
+In Table 28 shows the summary of joint models with full covariates on survival part. The covariate of chronic kidney disease,anchor_age, hypertension and drug heparin covariate are associated with survival outcome, as 95% credible interval of these covariates do not include 0. It also suggests that estimate value of value(log_value_sc) (association parameter) is 0.054 and the credible interval between -0.454 and 0.472, suggesting one standard deviation increase in the biomarker level is associated with an approximately 1.055-fold(exp(0.054)) increase in the hazard of death.
+
+```{r fig.pos="H",fig.cap="Traceplot of association parameter", out.width="60%"}
+ggtraceplot(jointFit_MIMIC1,"alphas")
+```
+
+Figure XX presents the traceplot of the association parameter. The chains exhibit stable mixing and no apparent trends, indicating reasonable convergence of the MCMC algorithm.
+
+### Dynamic prediction
+
+```{r fig.pos='H',fig.cap="Dynamic Survival Predictions in Joint Model with Full Covariates of Joint Model",out.width="70%"}
+set.seed(123)
+
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(!is.na(subject_id)) %>%
+  dplyr::mutate(subject_id = as.character(subject_id))
+
+# filter those with 2 obs and above
+valid_ids <- biomarkersP_icu_clean %>%
+  count(subject_id) %>%
+  filter(n >= 2) %>%
+  pull(subject_id)
+
+newdata_clean <- biomarkersP_icu_clean %>%
+  filter(subject_id %in% valid_ids)
+
+plots <- list()
+plot_index <- 1   
+
+for (id_i in valid_ids) {
+
+  newdata_long <- newdata_clean %>%
+    dplyr::filter(subject_id == id_i) %>%
+    dplyr::arrange(time_c) %>%
+    tidyr::drop_na(time_c, hypertension, chronic_kidney_disease,drug_heparin, gender, anchor_age)
+
+
+    if (nrow(newdata_long) < 2) next
+
+  t_star <- max(newdata_long$time_c)
+
+
+  newdata_surv <- newdata_long %>%
+    dplyr::slice(1) %>%          
+    dplyr::mutate(Time_alive = t_star, event = 0)
+
+  predict_MIMIC_jm <- tryCatch(
+    predict(
+      jointFit_MIMIC1,
+      newdata = list(newdataL = newdata_long,
+                     newdataE = newdata_surv),
+      process = "event",
+      return_newdata = TRUE,
+      times = seq(t_star, t_star + 5, by = 0.25)
+    ),
+    error = function(e) NULL
+  )
+
+  # Skip subjects where prediction fails
+  if (is.null(predict_MIMIC_jm) || nrow(predict_MIMIC_jm) == 0) next
+
+  
+  g_long <- ggplot(newdata_long,
+                   aes(x = time_c, y = log_value)) +
+    geom_point(colour = "darkred") +
+    geom_line(colour = "darkred") +
+    geom_vline(xintercept = t_star, linetype = "dashed") +
+    labs(title = paste("Subject", id_i),
+         y = "log biomarker") +
+    theme_minimal()
+
+g_surv <- ggplot(predict_MIMIC_jm,
+                 aes(x = time_c, y = 1 - pred_CIF)) +
+  geom_ribbon(aes(ymin = 1 - upp_CIF, ymax = 1 - low_CIF),
+              fill = "steelblue", alpha = 0.3) +
+  geom_line(colour = "steelblue") +
+  geom_vline(xintercept = t_star, linetype = "dashed") +
+  labs(x = "Time (years)", y = "Survival Probability") +
+  theme_minimal()
+
+  plots[[plot_index]] <- g_long / g_surv
+  plot_index <- plot_index + 1
+}
+
+wrap_plots(plots[1:6], ncol = 3)
+
+```
+
+Figure XX displays the subject-specific dynamic survival predictions from the full joint model for subjects 10001217, 10001725, 10002428, 10002495, 10003046 and 10003400 over a 5-day prediction horizon from the landmark time. In general, the predicted survival probabilities for most subjects remain above 0.9 throughout the prediction window, with the exception of subject 10003400, which exhibits relatively lower predicted survival probabilities. Among the selected subjects, subject 10003400 shows greater uncertainty in the predicted survival function, as indicated by a wider credible interval. This increased uncertainty may be attributed to greater variability in the biomarker trajectory over time.
+
+
+
+```{r fig.pos='H',fig.cap="ROC curve — full covariates joint model (MIMIC-IV)",out.width="70%"}
+roc_res <- tvROC(
+  jointFit_MIMIC1,
+  newdata = newdata_clean,
+  Tstart  = 1,
+  Dt      = 10
+)
+
+sensitivity <- roc_res$TP / (roc_res$TP + roc_res$nFN)
+specificity <- roc_res$nTN / (roc_res$nTN + roc_res$FP)
+
+roc_df_MIMIC <- data.frame(
+  FPR = 1 - specificity,
+  TPR = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  arrange(FPR)
+
+auc0 <- tvAUC(
+  jointFit_MIMIC1,
+  newdata = newdata_clean,
+  Tstart = 1,
+  Dt = 10
+)$auc
+
+p_roc <- ggplot(roc_df_MIMIC, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc0, 3)),
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    subtitle = "Landmark: 0 years | Horizon: 10 days",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+p_roc
+```
+Figure XX presents the time-dependent ROC curve for the joint model with full covariates, evaluated at a 10-day prediction horizon. The model performance is assessed at a landmark time of 1 time unit, yielding an AUC of 0.803 This indicates that the model has good discriminative ability in distinguishing between patients who experience the event within the specified time window and those who do not. An AUC of 0.803 suggesting reasonable predictive performance of the joint model. Further improvement in predictive accuracy may be achieved by incorporating the full MIMIC-IV dataset, which would increase sample size and improve data balance across time points.
+
+
+
+```{r fig.cap="Calibration Curve for Full Joint Model in MIMIC-IV data"}
+
+landmark_times = c(0, 5, 10)
+
+newdata_clean <- newdata_clean %>%
+  group_by(subject_id) %>%
+  arrange(time_c, .by_group = TRUE) %>%
+  ungroup()
+
+newdata_clean <- newdata_clean %>%
+  distinct(subject_id, time_c, .keep_all = TRUE)
+
+tvBrier_result_full <- lapply(landmark_times, function(t0) {
+  tvBrier(
+    jointFit_MIMIC1,
+    newdata = newdata_clean,
+    Tstart = t0,
+    Dt = 5
+  )
+
+})
+
+extract_brier <- function(res, t0) {
+
+  data.frame(
+    landmark = t0,
+    horizon = res$Thoriz,
+    brier = res$Brier
+  )
+}
+
+tvBrier_full_df <- lapply(seq_along(landmark_times), function(i) {
+
+  extract_brier(
+    tvBrier_result_full[[i]],
+    landmark_times[i]
+  )
+
+}) %>% dplyr::bind_rows()
+
+knitr::kable(tvBrier_full_df, caption = "Time Dependent Brier Score for Full Joint Model",digits=3)
+
+grid <- seq(
+  0,
+  ceiling(max(biomarkersP_icu_clean$Time_alive, na.rm = TRUE)),
+  by = 5
+)
+
+event_table <-  biomarkersP_icu_clean %>%
+     group_by(subject_id) %>%
+     summarise(
+         Time_alive = first(Time_alive),
+         event = max(death_event),
+         .groups = "drop"
+     ) %>%
+     mutate(interval = cut(Time_alive, breaks = grid <- grid, right = FALSE)) %>%
+     group_by(interval) %>%
+     summarise(
+         n_events = sum(event),
+         n_total  = n(),
+         event_rate = n_events / n_total
+     )
+
+knitr::kable(event_table, caption = "Distribution of death events in 1-unit time intervals",digits=3)
+```
+The landmark times for the time-dependent Brier score are selected in a data-driven manner based on the distribution of observed event times within the study period. Table XX presents the Brier score of the full joint model at different prediction horizons following selected landmark times. The Brier score remains low at early prediction horizons (0–5 days), indicating strong short-term predictive accuracy. An increase in the Brier score is observed at the 5–10 day horizon, which may be attributed to a reduced number of events and increased uncertainty in survival prediction. Although the lowest Brier score is observed at the 10–15 day horizon, this result should be interpreted with caution due to the small number of individuals and uneven event distribution in this interval, as shown in Table XX
+
+
+```{r fig.cap="Calibration plot for full joint model"}
+par(mfrow = c(1,1))
+par(mar = c(4,4,2,1))
+
+calibration_plot(
+  jointFit_MIMIC1,
+  newdata = newdata_clean,
+  Tstart = 1,
+  Dt = 10
+)
+```
+The calibration curve compares the predicted survival probabilities with the observed survival proportions at specified landmark times and prediction horizons. Based on Figure XX, it shows that the the model tends to overestimate survival probabilities, as the calibration curve lies slighlt below 45 degrees reference line.
+
+## Conclusion
+

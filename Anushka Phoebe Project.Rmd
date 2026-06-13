@@ -1,0 +1,1111 @@
+---
+title: "Joint Models of longitudinal outcomes and time to event data"
+
+authors:
+  - name: "Phoebe Wong Hui Lei"
+    affiliation: "University of Galway"
+    email: "p.wong2@universityofgalway.ie"
+    
+  - name: "Anushka Muley"
+    affiliation: "University of Galway"
+    email: "A.Muley1@universityofgalway.ie"
+
+abstract: |
+  This is my abstract text.
+
+bibliography: references.bib
+biblio-style: unsrt
+
+output:
+  rticles::arxiv_article:
+    latex_engine: xelatex
+
+header-includes:
+  - "\\newcommand{\\pandocbounded}[1]{#1}"
+---
+
+# Introduction
+
+Here goes an introduction text
+
+# Headings: first level
+\label{sec:headings}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE}
+library(table1)
+library(rticles)
+library(dplyr)
+library(broom)
+library(gtsummary)
+library(ggplot2)
+library(survival)
+library(survminer)
+library(performance)
+```
+
+**Background**
+*pbc*
+```{r echo=FALSE}
+library(table1)
+library(dplyr)
+
+pbc <- pbc2 %>%
+  mutate(
+    id = as.integer(id),
+    histologic = factor(histologic),
+    sex = factor(sex, labels = c("Female", "Male")),
+    hepatomegaly = factor(hepatomegaly),
+    ascites = factor(ascites),
+    drug = factor(drug)
+  ) %>%
+  arrange(id, year)
+
+table1(
+  ~ age + status + sex + serBilir + albumin + drug + year + ascites + edema | sex,
+  data = pbc
+)
+```
+
+The PBC dataset comprises 1,945 longitudinal observations from 312 patients with Primary Biliary Cirrhosis (PBC). The mean age at baseline was 49.3 years (SD = 10.1), reflecting a predominantly middle-aged cohort. The median serum bilirubin was 1.4 mg/dL, with substantial right-skew (range: 0.1–41.0 mg/dL), indicating considerable heterogeneity in disease severity across patients.
+
+*aids*
+```{r echo=FALSE}
+data("aids", package = "JM")
+data("aids.id", package = "JM")
+
+aids_df <- aids %>%
+  mutate(
+    id     = as.integer(patient),  # explicit subject ID
+    logCD4 = log(CD4)
+  ) %>%
+  arrange(id, obstime)
+
+table1(~gender+obstime+prevOI+AZT+drug|death,data=aids_df)
+```
+
+The AIDS dataset contains a total of 1,405 observations of CD4 counts from 467 individuals, with varying follow-up periods from baseline up to the 18th month. The dataset includes several covariates: gender, prevOI, AZT, and drug. The variable prevOI indicates whether the patient had a previous opportunistic infection at baseline. The variable AZT refers to Azidothymidine treatment status, with two categories: intolerance and failure. The variable drug indicates the treatment received, including Zalcitabine (ddC) and Didanosine (ddI).
+
+**Biomarkers trajectories over time**
+*pbc*
+```{r echo=FALSE}
+p_pbc_long <- ggplot(pbc, aes(x = year, y = log(serBilir), group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(title = "PBC: log(serum bilirubin) trajectories",
+       x = "Years since baseline", y = "log(serum bilirubin)")
+p_pbc_long
+
+```
+
+The spaghetti plot reveals substantial between-patient heterogeneity in serum bilirubin trajectories over time. While many patients maintain relatively stable bilirubin levels, a subset exhibit steep upward trajectories, reflecting rapid disease progression. The LOESS smoother shows an overall increasing trend in log(serum bilirubin) across the cohort, confirming progressive liver dysfunction over the study period.
+
+*aids*
+```{r echo=FALSE}
+p_aids_long <- ggplot(aids_df, aes(x = obstime, y = logCD4, group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(
+    title = "AIDS: log(CD4) trajectories over time",
+    x = "obstime", y = "log(CD4)"
+  )
+p_aids_long
+```
+
+The spaghetti plot shows substantial variability between patients, with some individuals having low baseline CD4 levels and others high baseline levels. The LOESS smooth indicates an overall decreasing trend in log(CD4) across the cohort, suggesting that CD4 counts decline gradually over time. Fewer trajectories are observed after month 12, indicating possible loss to follow-up.
+
+
+**Kaplan–Meier by baseline bilirubin (tertiles)**
+*pbc*
+```{r echo=FALSE}
+pbc_surv <- pbc2.id %>%
+  mutate(id = as.integer(id),
+         event = as.integer(status2 != 0))
+
+pbc_base <- pbc %>%
+  group_by(id) %>%
+  arrange(year, .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(bili_grp = ntile(serBilir, 3),
+         bili_grp = factor(bili_grp, labels = c("Low","Medium","High")))
+
+# Now join works
+km_df <- pbc_surv %>%
+  left_join(pbc_base %>% select(id, bili_grp), by = "id") %>%
+  filter(!is.na(bili_grp))
+
+fit_km_pbc <- survfit(Surv(years, event) ~ bili_grp, data = km_df)
+
+ggsurvplot(
+  fit_km_pbc, data = km_df, risk.table = TRUE,
+  title = "PBC: Survival by baseline serum bilirubin tertiles",
+  legend.title = "Baseline ser. bilirubin"
+)
+
+```
+
+The Kaplan–Meier curves demonstrate a clear and statistically meaningful separation in survival probability across baseline serum bilirubin tertiles. Patients in the high tertile experience substantially worse survival, with the curves diverging early and widening throughout follow-up. This confirms that baseline bilirubin is a strong prognostic marker for mortality or transplantation in PBC, and provides early justification for its inclusion as the longitudinal biomarker in the joint model.
+
+*aids*
+```{r echo=FALSE}
+aids_surv <- aids_df %>%
+  distinct(id, Time, death)
+
+aids_base <- aids_df %>%
+  group_by(id) %>%
+  arrange(obstime, .by_group = TRUE) %>%   # ensure earliest visit first
+  slice(1) %>%                             # baseline row per subject
+  ungroup() %>%
+  mutate(
+    cd4_grp = ntile(CD4, 3),
+    cd4_grp = factor(cd4_grp, labels = c("Low","Medium","High"))
+  ) %>%
+  select(id, cd4_grp, prevOI, drug, AZT, gender)
+
+# Survival frame with tertiles + covariates
+km_aids_df <- aids_surv %>%
+  left_join(aids_base,by = "id") %>%
+  filter(!is.na(cd4_grp))
+
+fit_km_aids <- survfit(Surv(Time, death) ~ cd4_grp, data = km_aids_df)
+
+ggsurvplot(
+  fit_km_aids, data = km_aids_df, risk.table = TRUE,
+  ggtheme = theme_minimal(),
+  title = "AIDS: Survival by baseline CD4 tertiles",
+  legend.title = "Baseline CD4"
+)
+
+```
+
+The Kaplan–Meier curves demonstrate a clear separation of survival probability across baseline CD4 tertiles.
+It suggests that individuals in low CD4 tertile experience substantially lowest survival probability, with the curves diverging early and widening throughout follow-up. 
+
+**Cox Proportional Hazard Model**
+*pbc*
+```{r echo=FALSE}
+# Age
+cox_age <- coxph(Surv(years, event) ~ age, data = pbc_surv, x = TRUE, y = TRUE)
+summary(cox_age)
+
+# Sex
+pbc_surv_sex <- pbc_surv %>%
+  mutate(sex = factor(sex, labels = c("Female", "Male")))
+
+cox_sex <- coxph(Surv(years, event) ~ sex, data = pbc_surv_sex, x = TRUE, y = TRUE)
+summary(cox_sex)
+
+# Drug
+pbc_surv_drug <- pbc_surv %>%
+  mutate(drug = factor(drug))
+
+cox_drug <- coxph(Surv(years, event) ~ drug, data = pbc_surv_drug, x = TRUE, y = TRUE)
+summary(cox_drug)
+
+# Ascites
+pbc_surv_ascites <- pbc_surv %>%
+  mutate(ascites = factor(ascites))
+
+cox_ascites <- coxph(Surv(years, event) ~ ascites, data = pbc_surv_ascites, x = TRUE, y = TRUE)
+summary(cox_ascites)
+
+# Hepatomegaly
+pbc_surv_hep <- pbc_surv %>%
+  mutate(hepatomegaly = factor(hepatomegaly))
+
+cox_hep <- coxph(Surv(years, event) ~ hepatomegaly, data = pbc_surv_hep, x = TRUE, y = TRUE)
+summary(cox_hep)
+
+# Edema
+pbc_surv_edema <- pbc_surv %>%
+  mutate(edema = factor(edema))
+
+cox_edema <- coxph(Surv(years, event) ~ edema, data = pbc_surv_edema, x = TRUE, y = TRUE)
+summary(cox_edema)
+
+# Histologic
+pbc_surv_hist <- pbc_surv %>%
+  mutate(histologic = factor(histologic))
+
+cox_hist <- coxph(Surv(years, event) ~ histologic, data = pbc_surv_hist, x = TRUE, y = TRUE)
+summary(cox_hist)
+
+```
+Age:
+Each 1-year increase in age is associated with a 4.5% higher hazard of death.
+p < 0.001, strong evidence that age is a risk factor.
+
+Sex:
+Being male reduces the hazard by 48% compared to females.
+p is 0.0029, This is less than 0.05, so sex is a statistically significant predictor of survival.
+
+Drug:
+Hazard ratio ≈ 1.0 → no effect on survival.
+p = 0.992, not significant.
+
+Ascites:
+Having ascites increases hazard by 7.6 times.
+p < 2e-16, highly significant.
+Hepatomegaly:
+Having hepatomegaly increases hazard by 3.06 times.
+p = 9.46e-10, highly significant.
+
+Edema:
+Edema (no diuretics) increases hazard by 1.63 times.
+Edema (despite diuretics) increases hazard by 10.9 times.
+p = 0.033 (no diuretics), p < 2e-16 (despite diuretics), which is significant.
+
+Histologic stage (vs stage 1):
+Stage 2 : hazard6.39 times, p = 0.070, significant
+Stage 3 : hazard 9.67 times, p = 0.025,significant
+Stage 4 : hazard 24.04 times, p = 0.0016, significant
+
+```{r echo=FALSE}
+pbc_surv <- pbc_surv %>%
+  mutate(
+    sex = factor(sex, labels = c("Female", "Male")),
+    drug = factor(drug),
+    ascites = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema = factor(edema),
+    histologic = factor(histologic)  
+  )
+
+cox_pbc_full <- coxph(
+  Surv(years, event) ~ age + sex + drug +
+    ascites + hepatomegaly + edema +
+    histologic,
+  data = pbc_surv,
+  x = TRUE, y = TRUE
+)
+
+summary(cox_pbc_full)
+```
+
+```{r echo=FALSE}
+ph_test <- cox.zph(cox_pbc_full)
+print(ph_test)
+plot(ph_test)
+```
+Check for Multicollinearity:
+```{r echo=FALSE}
+check_collinearity(cox_pbc_full)
+```
+
+Parsimonious Model 1:
+```{r echo=FALSE}
+cox_pbc_par_with_s <- coxph(
+  Surv(years, event) ~ age + sex +
+    ascites + hepatomegaly + edema +
+    histologic,
+  data = pbc_surv,
+  x = TRUE, y = TRUE
+)
+```
+
+Increasing age was associated with a modest but significant increase in hazard (HR = 1.03, p < 0.001). Clinical severity indicators showed stronger associations: presence of ascites (HR = 2.18, p = 0.011), hepatomegaly (HR = 1.79, p = 0.005), and especially severe edema requiring diuretics (HR = 5.00, p < 0.001) were all linked to higher risk of death. Higher histologic stage tended to increase hazard, with stage 4 showing a significant effect (HR = 9.17, p = 0.031), while stages 2–3 showed weaker or borderline associations. Sex and mild edema were not statistically significant predictors. Overall model performance was strong (concordance = 0.774, p < 2e-16), indicating good discrimination of survival risk by the included covariates.
+
+
+Parsimonious model 2:
+
+```{r echo=FALSE}
+
+cox_pbc_par_without_s <- coxph(
+  Surv(years, event) ~ age +
+    ascites + hepatomegaly + edema +
+    histologic,
+  data = pbc_surv,
+  x = TRUE, y = TRUE
+)
+
+summary(cox_pbc_par_without_s)
+```
+
+In this second model, where sex was excluded, the estimated effects of the remaining covariates were essentially unchanged: age remained a significant risk factor (HR ≈ 1.03), and markers of disease severity—ascites (HR ≈ 2.28), hepatomegaly (HR ≈ 1.83), and severe edema requiring diuretics (HR ≈ 4.92)—continued to show strong and statistically significant associations with higher mortality risk. Histologic stage also showed a similar pattern in both models, with a clear increase in hazard at stage 4 (HR ≈ 8.86), while intermediate stages remained imprecisely estimated. Importantly, removing sex did not materially alter effect sizes, significance levels, or overall model performance, with concordance remaining stable at about 0.77 in both cases, suggesting that sex does not confound or meaningfully contribute to the survival prediction in this dataset.
+
+Best Model:
+```{r echo=FALSE}
+AIC(cox_pbc_full, cox_pbc_par_with_s, cox_pbc_par_without_s)
+BIC(cox_pbc_full, cox_pbc_par_with_s, cox_pbc_par_without_s)
+```
+If we remove the covariate sex from model, the AIC and BIC is the lowest. Therefore its the best model.
+
+Univariate Cox Model:
+When each variable was analysed individually, several factors were found to significantly predict mortality. Increasing age was associated with a higher risk of death (HR = 1.045, p < 0.001). Sex was also significant, with males showing a lower hazard compared with females (HR = 0.522, p = 0.003). Clinical indicators of disease severity were strong predictors: the presence of ascites (HR = 7.578, p < 0.001), hepatomegaly (HR = 3.062, p < 0.001), and edema (HR = 1.629 for mild and HR = 10.901 for severe, both p < 0.05) were all associated with increased mortality risk. Similarly, more advanced histologic stage was linked to substantially higher risk, with hazard ratios ranging from 6.39 to 24.04 for stages 3 and 4 (p < 0.05). In contrast, the drug treatment had no observable effect on survival (HR ≈ 1.0, p = 0.992).
+
+Full multivariable Cox model:
+After adjusting for all variables simultaneously, several predictors remained significant. Age continued to show a modest but significant increase in risk (HR = 1.032, p < 0.001). Ascites (HR = 2.201, p = 0.011), hepatomegaly (HR = 1.792, p = 0.005), severe edema (HR = 4.949, p < 0.001), and histologic stage 4 (HR = 9.087, p = 0.032) were also independently associated with higher mortality. However, sex, drug treatment, and mild edema were no longer statistically significant once the other clinical variables were included, suggesting that their earlier effects may have been explained by confounding with measures of disease severity. The concordance statistic for the model was 0.774, indicating good ability to distinguish between patients with higher and lower survival risk.
+
+Proportional hazards assumption:
+The Schoenfeld residuals test indicated no evidence of violations of the proportional hazards assumption for any individual variable (all p > 0.05). The global test was also non-significant (χ² = 14.76, p = 0.141), confirming that the assumption underlying the Cox model is satisfied.
+
+Multicollinearity:
+Variance inflation factor (VIF) values for all predictors were below 1.6, indicating that multicollinearity was not a concern in the model.
+
+Model selection:
+Among the candidate models, the parsimonious Cox model excluding sex and drug (cox_pbc_par_without_s) produced the lowest AIC (1338.9) and BIC (1362.5). This suggests that it provides the best balance between model fit and simplicity, making it the preferred specification.
+
+
+*aids*
+```{r echo=FALSE}
+cox_aids_full <- coxph(Surv(Time, death) ~ gender+drug+AZT+prevOI, data = km_aids_df, x = TRUE)
+summary(cox_aids_full)
+```
+
+Based on the Cox proportional hazards model with full covariates, males have a 29% lower hazard of the event compared to females (HR < 1). Individuals who consumed ddI have a 23.4% higher hazard compared to those who consumed ddC. The hazard of the event for individuals with AZT failure is 17.1% higher than for those with AZT intolerance. Individuals with a previous AIDS history have approximately a three-fold higher hazard compared to those without an AIDS history.
+
+Based on the p-values, prevOI is statistically significant (p = 0.00000001 < 0.05), providing strong evidence that previous opportunistic infection is associated with the hazard of the event.
+
+```{r echo=FALSE}
+cox_aids_gender <- coxph(Surv(Time, death) ~ gender, data = km_aids_df, x = TRUE)
+summary(cox_aids_gender)
+
+cox_aids_drug <- coxph(Surv(Time, death) ~ drug, data = km_aids_df, x = TRUE)
+summary(cox_aids_drug)
+
+cox_aids_AZT <- coxph(Surv(Time, death) ~ AZT, data = km_aids_df, x = TRUE)
+summary(cox_aids_AZT)
+
+cox_aids_prevOI <- coxph(Surv(Time, death) ~ prevOI, data = km_aids_df, x = TRUE)
+summary(cox_aids_prevOI)
+
+```
+
+The hazard ratio for male patients is 15.26% lower than female patients.Given the p-value of gender is 0.494, it shows that it is not significant to the survival.
+
+The hazard ratio for the patients who consumed drugddI is 23.4% higher over to those who consumed drugddC.Given the p-value of drug is 0.151, it shows that it is not significant to the survival.
+
+There are 2 times higher of hazard ratio for the patients who encountered AZT failure over to those who encountered AZT intolerance. Given the p-value of AZT is 1.29e-06 , it shows that it is significant to the survival.
+
+There are 3 times higher of hazard ratio for the patients who had a previous opportunistic infection at baseline. Given the p-value of prevOI is 2.58e-11, it shows that it is significant to the survival.
+
+```{r echo=FALSE}
+model.coxph <- c("cox_aids_gender","cox_aids_drug","cox_aids_AZT","cox_aids_prevOI")
+
+aic.coxph <- c(AIC(cox_aids_gender,cox_aids_drug,cox_aids_AZT,cox_aids_prevOI))
+
+bic.coxph <- c(BIC(cox_aids_gender,cox_aids_drug,cox_aids_AZT,cox_aids_prevOI))
+
+log_Likelihood.coxph <-c(as.numeric(logLik(cox_aids_gender)),as.numeric(logLik(cox_aids_drug)),as.numeric(logLik(cox_aids_AZT)),as.numeric(logLik(cox_aids_prevOI)))
+
+result_c_coxph <- data.frame(
+  model.coxph,
+  AIC = aic.coxph,
+  BIC = bic.coxph,
+  logLik = log_Likelihood.coxph
+)
+result_c_coxph
+```
+
+Based on the comparison of the cox proportional hazard models using AIC, BIC, and log-likelihood criteria, the model including prevOI as a covariate shows the best performance. It yields the lowest AIC (2111.917) and BIC (2115.153) values, along with the highest log-likelihood (-1054.958), indicating that this model provides the best fit to the data among the competing models.
+
+
+```{r echo=FALSE}
+sjPlot::tab_model(cox_aids_full,cox_aids_prevOI)
+```
+The results indicate that the full model and the model including only the prevOI covariate show similar performance. This can be observed from the conditional R^2 and marginal R^2 values are also very similar between the two models,
+
+**Linear Mixed Model**
+*pbc*
+```{r echo=FALSE}
+library(nlme)
+
+model_year <- nlme::lme(
+  log(serBilir) ~ year,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+
+model_sex <- nlme::lme(
+  log(serBilir) ~ year + sex,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_year)
+
+summary(model_sex)
+
+```
+model_year: βyear = 0.177, e0.177 = 1.19. We can conclude that bilirubin increases by 19% on average. Therefore, Strong evidence of disease progression over year.
+model_sex : p value is 0.2778, which is greater than 0.05. Therefore sex is not a significant predictor.
+```{r echo=FALSE}
+model_age <- nlme::lme(
+  log(serBilir) ~ year + age,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_age)
+
+```
+model_age : p value is 0.9342, which is greater than 0.05. Therefore age is not a significant predictor.
+```{r echo=FALSE}
+model_drug <- nlme::lme(
+  log(serBilir) ~ year + drug,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_drug)
+
+```
+model_drug : p value is 0.255, which is greater than 0.05. Therefore drugD-penicil is not a significant predictor.
+
+```{r echo=FALSE}
+model_ascites <- nlme::lme(
+  log(serBilir) ~ year + ascites,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_ascites)
+```
+model_ascites : p value is 0, which is lesser than 0.05. Therefore ascites is a significant predictor.
+
+```{r echo=FALSE}
+model_hepatomegaly <- nlme::lme(
+  log(serBilir) ~ year + hepatomegaly,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_hepatomegaly)
+
+is.null(model_hepatomegaly)
+
+inherits(model_hepatomegaly, "try-error")
+```
+model_hepatomegaly : p value is 0.0019, which is lesser than 0.05. Therefore hepatomegaly is a significant predictor.
+
+
+```{r echo=FALSE}
+model_edema <- nlme::lme(
+  log(serBilir) ~ year + edema,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_edema)
+```
+model_edema : p value is 0, which is lesser than 0.05. Therefore edema is a significant predictor.
+
+```{r echo=FALSE}
+model_histologic <- nlme::lme(
+  log(serBilir) ~ year + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+class(model_histologic)
+
+summary(model_histologic)
+
+is.null(model_histologic)
+
+inherits(model_histologic, "try-error")
+```
+
+model_histologic : p value is 0.0072, which is lesser than 0.05. Therefore histologic stage is a significant predictor.
+
+AIC has been applied to find the best model in linear mixed model with single covariate
+```{r echo=FALSE}
+AIC(model_year, model_age, model_sex, model_ascites, model_drug, model_edema, model_hepatomegaly, model_histologic)
+```
+
+```{r echo=FALSE}
+model2 <- nlme::lme(
+  log(serBilir) ~ year + sex + age + drug + ascites + hepatomegaly + edema + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+class(model2)
+
+summary(model2)
+
+is.null(model2)
+
+inherits(model2, "try-error")
+```
+
+To check for multicollinearity:
+```{r}
+library(performance)
+check_collinearity(model2)
+```
+
+Parsimonious Model:
+```{r echo=FALSE}
+model_parsimonious <- nlme::lme(
+  log(serBilir) ~ year + ascites + hepatomegaly + edema + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_parsimonious)
+```
+
+```{r}
+AIC(model2, model_parsimonious)
+BIC(model2, model_parsimonious)
+```
+
+Univariate models: Time (year) was the strongest individual predictor of log(serum bilirubin), with an estimated annual increase of 0.177 (p < 0.001), corresponding to a 19% increase in bilirubin per year on the original scale. This confirms progressive disease over time. Sex (p = 0.278), age (p = 0.934), and drug (p = 0.255) were not statistically significant predictors of bilirubin trajectory. Ascites (p < 0.001), hepatomegaly (p = 0.002), edema (p < 0.001), and histologic stage (p = 0.040 for stage 4) were all significant predictors.
+AIC comparison: The model including ascites had the lowest AIC (2816.2) among univariate models, indicating it explained substantially more variation than models with sex, age, drug, or histologic stage alone.
+Full model (model2): In the multivariable model including all covariates, year (β = 0.112, p < 0.001), ascites (β = 0.187, p < 0.001), hepatomegaly (β = 0.068, p = 0.008), edema — both mild (β = 0.179, p < 0.001) and severe (β = 0.237, p < 0.001) — and histologic stage 4 (β = 0.174, p = 0.013) remained statistically significant. Sex, age, and drug were not significant in the presence of the other covariates.
+Multicollinearity check: All VIF values were below 1.6, indicating no meaningful multicollinearity among predictors.
+Parsimonious model: Removing sex, age, and drug produced the parsimonious model with lower AIC (2805.7 vs 2820.3) and lower BIC (2877.7 vs 2908.8) than the full model, confirming it as the preferred longitudinal specification. All retained predictors remained statistically significant with similar effect estimates showing that simplifying the model did not reduce its ability to explain the results.
+
+
+*aids*
+```{r echo=FALSE}
+aids_lme_df <- aids_df %>% 
+  mutate(logCD4=log1p(CD4))%>% 
+  filter(is.finite(logCD4), is.finite(obstime))
+
+aids_lme_full <- nlme::lme(
+  logCD4~obstime+gender+drug+AZT+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_full)
+```
+In AIDS dataset, linear mixed effects model with full covariates such as obstime,gender,drug,AZT,prevOI is fitted to identify factors associated with CD4 counts.Random slope and random intercept is included to account for subject-specific baseline CD4 counts and individually rate of changes of CD4 counts over time.
+
+The model indicates a moderate negative correlation of -0.548 between AZT and prevOI effects, suggesting that these variables may explain overlapping variation in CD4 counts. However, based on the p-values of the fixed effects, only prevOI was statistically significant in explaining the outcome.
+
+
+```{r echo=FALSE}
+library(performance)
+
+check_collinearity(aids_lme_full)
+```
+
+It shows that there is low correlation, suggesting that multicollinearity is not the major concern in this dataset.
+
+
+```{r echo=FALSE}
+aids_lme_exc_AZT <- nlme::lme(
+  logCD4~obstime+gender+drug+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_exc_AZT)
+```
+
+```{r echo=FALSE}
+anova(aids_lme_full, aids_lme_exc_AZT)
+```
+Based on the likelihood ratio test, removing the AZT covariate from the linear mixed-effects model did not significantly worsen model fit (p = 0.085 > 0.05). Therefore, there is insufficient evidence to conclude that AZT improves model fit.
+
+```{r echo=FALSE}
+comp_lme <- data.frame(
+  model=c("lme with full covariates","lme exclude AZT"),
+  aic=AIC(aids_lme_full,aids_lme_exc_AZT)$AIC,
+  bic=BIC(aids_lme_full,aids_lme_exc_AZT)$BIC
+)
+comp_lme
+```
+Based on the comparison of AIC and BIC for both linear mixed-effects models, the model excluding the AZT covariate yielded lower AIC and BIC values. This indicates a better trade-off between model fit and model complexity. Therefore, the reduced model without AZT is preferred on the basis of information criteria.
+
+Based on the likelihood ratio test and the comparison of AIC and BIC, the linear mixed-effects model excluding the AZT covariate shows lower AIC and BIC values, and the LRT indicates no significant loss of fit (p = 0.085). Overall, this suggests that the reduced model provides a better balance between model fit and complexity. Therefore, the model without AZT is preferred for parsimony.
+
+```{r echo=FALSE}
+aids_lme_gender <- nlme::lme(
+  logCD4~obstime+gender,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_gender)
+
+aids_lme_drug <- nlme::lme(
+  logCD4~obstime+drug,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_drug)
+
+aids_lme_AZT <- nlme::lme(
+  logCD4~obstime+AZT,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_AZT)
+
+aids_lme_prevOI <- nlme::lme(
+  logCD4~obstime+prevOI,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_prevOI)
+
+aids_lme_prevOI_AZT <- nlme::lme(
+  logCD4~obstime+prevOI+AZT,
+  random=~obstime|id,
+  data=aids_lme_df)
+summary(aids_lme_prevOI_AZT)
+```
+Given the p-value of gender is 0.5917, and larger than 0.05, it shows that it is not a significant predictor of CD4 count.
+
+Given the p-value of drug is 0.3327, and larger than 0.05, it shows that it is not a significant predictor of CD4 count.
+
+Given the p-value of AZT is close to 0, it shows that it is a significant predictor of CD4 count.
+
+Given the p-value of prevOI is close to 0, it shows that it is a significant predictor of CD4 count.
+
+Since prevOI and AZT were found to be statistically significant in separate linear mixed-effects models, they were included together as covariates in this linear mixed effect model to adjust for their effects and assess their independent associations with CD4 count. The p-value for prevOI is close to zero, providing strong evidence that previous opportunistic infection is a significant predictor of CD4 count, after adjusting for AZT.
+
+
+```{r echo=FALSE}
+model <- c("aids_lme_gender","aids_lme_drug","aids_lme_AZT","aids_lme_prevOI")
+
+aic <- c(AIC(aids_lme_gender,aids_lme_drug,aids_lme_AZT,aids_lme_prevOI)$AIC)
+
+bic <- c(BIC(aids_lme_gender,aids_lme_drug,aids_lme_AZT,aids_lme_prevOI)$BIC)
+
+log_Likelihood <-c(aids_lme_gender$logLik,aids_lme_drug$logLik,aids_lme_AZT$logLik,aids_lme_prevOI$logLik)
+
+result_c_lme <- data.frame(
+  model,
+  AIC = aic,
+  BIC = bic,
+  logLik = log_Likelihood
+)
+result_c_lme
+```
+
+Based on the comparison of the LME models using AIC, BIC, and log-likelihood criteria, the model including prevOI as a covariate shows the best performance. It yields the lowest AIC (1632.525) and BIC (1669.245) values, along with the highest log-likelihood (-809.2625), indicating that this model provides the best fit to the data among the competing models.
+
+```{r echo=FALSE}
+sjPlot::tab_model(aids_lme_exc_AZT,aids_lme_prevOI)
+```
+The results indicate that the full model and the model including only the prevOI covariate show very similar model fit. The estimated coefficients and confidence intervals for the intercept, obstime, and prevOI are comparable across both models. In addition, both the marginal and conditional R^2
+ values are nearly identical, suggesting that adding additional covariates does not substantially improve the explanatory power of the model.
+
+
+**Joint Model**
+*pbc*
+Joint Model with parsimonious models
+```{r echo=FALSE}
+library(JMbayes2)
+jointFit_par <- jm(
+  Mixed_objects = list(model_parsimonious),               
+  Surv_object = cox_pbc_par_without_s,                 
+  time_var = "year",                          
+  id_var = "id"
+)
+
+
+summary(jointFit_par)
+```
+
+The estimated mean log(serum bilirubin) at baseline (year = 0) for a reference patient without ascites, hepatomegaly, edema, and with the lowest histologic stage is 0.227. On average, log(serum bilirubin) increases by 0.123 per year, holding other covariates constant. Patients with ascites have higher bilirubin by 0.210, those with hepatomegaly by 0.066, and patients with mild edema (ednd) or severe edema despite treatment (eddd) have higher bilirubin by 0.172 and 0.244, respectively. Histologic stage is associated with higher bilirubin (0.063 per unit increase), with most estimates showing strong statistical evidence (p ≤ 0.01). The residual variability (σ) is 0.333, indicating moderate patient-level variation unexplained by these covariates.
+
+The joint model links the longitudinal evolution of log(serum bilirubin) with survival through an association parameter. This parameter quantifies the effect of the underlying true biomarker value on the hazard of death. A positive association indicates that higher bilirubin levels are associated with increased mortality risk.
+
+This means that as liver function deteriorates over time (reflected by increasing bilirubin), the risk of death increases dynamically. Therefore, survival is not only influenced by baseline covariates but also by the patient’s evolving disease trajectory.
+
+```{r echo=FALSE}
+jointFit <- jm(
+  Mixed_objects = list(model2),               
+  Surv_object = cox_pbc_full,                 
+  time_var = "year",                          
+  id_var = "id"
+)
+
+summary(jointFit)
+
+
+```
+
+The estimated mean log(serum bilirubin) at baseline (year = 0) for a reference patient who is male, without ascites, hepatomegaly, edema, and with the lowest histologic stage is 0.746. On average, log(serum bilirubin) increases by 0.125 per year, holding other covariates constant. Being female is associated with a decrease in bilirubin by 0.280, although this is not statistically significant (p = 0.109). Age and drug treatment (D-penicil) show negligible effects (−0.004 and −0.134, p > 0.05). Patients with ascites have higher bilirubin by 0.208, those with hepatomegaly by 0.063, and patients with mild edema (ednd) or severe edema despite treatment (eddd) have higher bilirubin by 0.171 and 0.246, respectively. Histologic stage is associated with higher bilirubin (0.061 per unit increase), showing strong statistical evidence (p ≤ 0.01).
+
+Although this second model includes additional covariates, the joint modelling framework still implies that the evolution of serum bilirubin over time is directly linked to survival, meaning that worsening liver function increases the risk of death throughout follow-up.
+
+Comparing Joint Models:
+```{r}
+compare_jm(jointFit, jointFit_par)
+```
+
+We can conclude that jointFit_par is the better model beacuse it has lower DIC and WAIC and higher LPML.
+The joint modelling framework provides important advantages over separate longitudinal and survival models. It accounts for the dependence between the biomarker process and survival outcome, incorporates measurement error in the longitudinal biomarker, and reduces bias due to informative dropout, where patients with worse health are more likely to experience the event earlier. By modelling both processes simultaneously, joint models provide more accurate and clinically meaningful estimates of disease progression and mortality risk.
+
+*aids*
+```{r echo=FALSE}
+jm_aids_full <- JM::jointModel(
+  lmeObject = aids_lme_exc_AZT,
+  survObject = cox_aids_full,
+  timeVar = "obstime"
+)
+summary(jm_aids_full)
+```
+
+The results combine a linear mixed-effects (LME) model excluding AZT with a Cox proportional hazards model including full covariates. The joint modelling results indicate that both prevOIAIDS and drugDDI have significant associations with survival, which differs from the separate sub-models. This highlights the joint model demonstrates stronger ability to capture the true effects of covariates by accounting for the relationship between CD4 progression and survival.The significant association of -1.213, confirming a dependence between cd4 evolution and survival. This suggests that declining CD4 substantially increases the hazard of death.
+
+```{r echo=FALSE}
+jm_aids_pars <- JM::jointModel(
+  lmeObject = aids_lme_prevOI,
+  survObject = cox_aids_prevOI,
+  timeVar = "obstime"
+)
+summary(jm_aids_pars)
+```
+
+The results combine a parsimonious linear mixed-effects (LME) model and a parsimonious Cox proportional hazards model, both including the prevOI covariate. The joint model estimates a significant association parameter of −1.1943, providing evidence of a relationship between CD4 evolution and survival. This indicates that higher CD4 values are associated with a lower hazard of the event, suggesting that improved immune status is protective against the risk of death.
+
+```{r echo=FALSE}
+model <- c("jm_aids_full","jm_aids_pars")
+
+aic <- c(AIC(jm_aids_full,jm_aids_pars))
+
+bic <- c(BIC(jm_aids_full,jm_aids_pars))
+
+log_Likelihood <-c(jm_aids_full$logLik,jm_aids_pars$logLik)
+
+result_c_lme <- data.frame(
+  model,
+  AIC = aic,
+  BIC = bic,
+  logLik = log_Likelihood
+)
+result_c_lme
+```
+
+Based on the comparison between the parsimonious joint model and the joint model with full covariates, the parsimonious model has a lower AIC (3151.779) and lower BIC (3197.389). This suggests that the parsimonious model provides a better balance between model fit and complexity. However, the joint model with full covariates has a slightly higher log-likelihood (1560.923) compared to the parsimonious model, indicating a marginally better model fit. Overall, the parsimonious joint model may be preferred due to its lower AIC and BIC values while maintaining a comparable fit.
+
+
+**Dynamic Survival Prediction**
+*pbc*
+
+```{r}
+library(tidyr)
+patients_selection <- pbc %>%
+  group_by(id) %>%
+  filter(n() >= 4) %>%               
+  filter(all(complete.cases(ascites, hepatomegaly, edema, histologic))) %>%
+  ungroup()
+set.seed(123)
+ids_pred <- sample(unique(patients_selection$id), size = 3)
+ids_pred
+plots <- vector("list", length(ids_pred))
+
+for (i in seq_along(ids_pred)) {
+  id_i <- ids_pred[i]
+  
+  # Longitudinal data for this patient
+  nd_long <- pbc %>%
+    filter(id == id_i) %>%
+    arrange(year) %>%
+    drop_na(ascites, hepatomegaly, edema, histologic)  
+  
+  # Landmark time = last observed longitudinal time
+  t_star <- max(nd_long$year, na.rm = TRUE)
+  
+  # Prepare survival data for prediction
+  nd_surv <- pbc_surv %>%
+    filter(id == id_i) %>%
+    mutate(years = t_star, event = 0) %>%
+    drop_na(age, ascites, hepatomegaly, edema, histologic)
+  
+  # Predict using JMbayes2
+  dp <- predict(
+  jointFit_par,
+  newdata = list(
+    newdataL = nd_long,  
+    newdataE = nd_surv   
+  ),
+  process = "event",
+  return_newdata = TRUE,
+  times = seq(t_star, t_star + 5, by = 0.25)
+)
+  
+  # Robust plotting
+  g <- try(plot(dp), silent = TRUE)
+  if (inherits(g, "ggplot")) {
+    g <- g + ggtitle(paste0("PBC: Dynamic survival — subject ", id_i))
+    plots[[i]] <- g
+  } else if (is.list(dp) && !is.null(dp$plot)) {
+    plots[[i]] <- dp$plot + ggtitle(paste0("PBC: Dynamic survival — subject ", id_i))
+  } else {
+    plots[[i]] <- dp
+  }
+}
+
+if (inherits(plots[[1]], "ggplot")) {
+  print(plots[[1]])
+} else {
+  plot(plots[[1]])
+}
+```
+
+Interpretation:
+The dynamic cumulative risk plot for Subject 309 demonstrates a favorable prognosis. Despite the overall positive association between serum bilirubin and hazard found in the joint model, this specific individual maintains a low predicted risk (below 10%) throughout the 10-year follow-up period. The widening of the 95% credible intervals at later time points reflects the increasing uncertainty inherent in long-term dynamic forecasting.
+
+```{r}
+id_high_risk <- 2
+
+nd_long_hr <- pbc %>%
+  filter(id == id_high_risk) %>%
+  arrange(year) %>%
+  drop_na(ascites, hepatomegaly, edema, histologic)
+
+t_star_hr <- max(nd_long_hr$year, na.rm = TRUE)
+
+nd_surv_hr <- pbc_surv %>%
+  filter(id == id_high_risk) %>%
+  mutate(years = t_star_hr, event = 0) %>%
+  drop_na(age, ascites, hepatomegaly, edema, histologic)
+
+dp_hr <- predict(
+  jointFit_par, 
+  newdata = list(
+    newdataL = nd_long_hr,  
+    newdataE = nd_surv_hr   
+  ),
+  process = "event",
+  times = seq(t_star_hr, t_star_hr + 5, by = 0.25),
+  return_newdata = TRUE
+)
+
+plot(dp_hr, use_ggplot = TRUE) + 
+  labs(
+    title = paste("High Risk Prognosis: Patient", id_high_risk),
+    subtitle = "Dynamic Cumulative Risk (Death/Transplant)",
+    x = "Years Since Baseline",
+    y = "Cumulative Risk Probability"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = "tomato") + 
+  scale_color_manual(values = "darkred")
+```
+
+Interpretation:
+Unlike Patient 309's flat line, Patient 2's red line will likely climb much higher.
+It demonstrates how the Joint Model distinguishes between a stable patient and a progressing one.
+
+# AUC and ROC curves
+
+```{r}
+pbc_long_clean <- pbc %>%
+  drop_na(year, serBilir, ascites, hepatomegaly, edema, histologic)
+
+pbc_surv_clean <- pbc2.id %>%
+  mutate(
+    id           = as.integer(id),
+    event        = as.integer(status2 != 0),
+    sex          = factor(sex, labels = c("Female", "Male")),
+    drug         = factor(drug),
+    ascites      = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema        = factor(edema),
+    histologic   = factor(histologic)
+  ) %>%
+  drop_na(age, ascites, hepatomegaly, edema, histologic)
+
+common_ids     <- intersect(unique(pbc_long_clean$id), unique(pbc_surv_clean$id))
+pbc_long_clean <- pbc_long_clean %>% filter(id %in% common_ids)
+pbc_surv_clean <- pbc_surv_clean %>% filter(id %in% common_ids)
+
+cat("Longitudinal subjects:", length(unique(pbc_long_clean$id)), "\n")
+cat("Survival subjects:    ", length(unique(pbc_surv_clean$id)), "\n")
+
+pbc_tv <- pbc_long_clean %>%
+  select(-any_of(c("years", "event", "status", "status2"))) %>%
+  left_join(
+    pbc_surv_clean %>% select(id, years, event),
+    by = "id"
+  )
+
+cat("Columns in pbc_tv:\n")
+print(names(pbc_tv))
+stopifnot(all(c("id", "year", "years", "event") %in% names(pbc_tv)))
+
+roc_res <- tvROC(
+  jointFit_par,
+  newdata = pbc_tv,
+  Tstart  = 2,
+  Dt      = 5
+)
+
+sensitivity <- roc_res$nTP / (roc_res$nTP + roc_res$nFN)
+specificity  <- roc_res$nTN / (roc_res$nTN + roc_res$nFP)
+
+auc_at_2  <- tvAUC(jointFit_par, newdata = pbc_tv, Tstart = 2, Dt = 5)
+auc_value <- as.numeric(auc_at_2$auc)
+cat("AUC at landmark 2, horizon 5:", round(auc_value, 3), "\n")
+
+roc_df <- data.frame(
+  FPR       = 1 - specificity,
+  TPR       = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  arrange(FPR, TPR)
+
+ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc_value, 3)),
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    title    = "ROC curve — joint model",
+    subtitle = "Landmark: 2 years | Horizon: 5 years",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+landmark_times <- c(1, 2, 3, 4, 5)
+auc_df <- data.frame(landmark = landmark_times, auc = NA_real_)
+
+for (i in seq_along(landmark_times)) {
+  tmp <- tryCatch(
+    tvAUC(
+      jointFit_par,
+      newdata = pbc_tv,
+      Tstart  = landmark_times[i],
+      Dt      = 5
+    ),
+    error = function(e) { message("Landmark ", landmark_times[i], ": ", e); NULL }
+  )
+  if (!is.null(tmp)) auc_df$auc[i] <- as.numeric(tmp$auc)
+}
+
+print(auc_df)
+
+ggplot(auc_df, aes(x = landmark, y = auc)) +
+  geom_line(colour = "#2166AC", linewidth = 1) +
+  geom_point(colour = "#2166AC", size = 3) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(
+    title    = "Time-dependent AUC — joint model",
+    subtitle = "Prediction horizon: 5 years",
+    x        = "Landmark time (years)",
+    y        = "AUC"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+ROC curve (landmark t = 2 years, horizon = 5 years):
+The time-dependent ROC curve evaluated at a landmark time of 2 years produced an AUC of 0.771, indicating good predictive performance. This means that the model is able to correctly distinguish between patients who will experience the event (death or transplantation) within the following 5 years and those who will not in about 77% of cases. The ROC curve lies clearly above the diagonal reference line (AUC = 0.5), showing that the model predicts outcomes substantially better than random chance. Overall, these results suggest that the joint model provides useful prognostic information for identifying patients at higher risk.
+
+The model performs best at the earliest landmark time, with an AUC of 0.866 at 1 year. This suggests that patients with early and severe increases in bilirubin are easier to distinguish from those with more stable disease at this stage. As the landmark time moves further into follow-up, the model’s ability to discriminate between patients decreases slightly, with AUC values ranging from 0.695 to 0.722 at 4–5 years. This decline is expected because, over time, the remaining patients tend to become more similar in terms of risk, making it harder to clearly separate high- and low-risk individuals. Nevertheless, the AUC remains above 0.69 at all landmark times, indicating that the model continues to provide useful predictive information throughout the follow-up period. Overall, these results suggest that the joint model maintains a meaningful ability to identify patients at higher risk and could be valuable for dynamic risk assessment in clinical settings.
+
+
+#Brier Score and Calibration Curve
+
+```{r}
+# Dynamic predictions for all patients at a specific horizon (e.g., 5 years)
+pred_obj <- predict(
+  jointFit_par,
+  newdata = list(
+    newdataL = pbc_long_clean,
+    newdataE = pbc_surv_clean
+  ),
+  process = "event",
+  return_newdata = TRUE,
+  times = 5   # prediction horizon in years
+)
+
+pred_probs <- pred_obj %>%
+  group_by(id) %>%
+  slice_tail(n = 1) %>%
+  ungroup() %>%
+  mutate(pred_risk = pred_CIF) %>%
+  select(id, pred_risk)
+
+calib_df <- pred_probs %>%
+  left_join(
+    pbc_tv %>%
+      group_by(id) %>%
+      slice(1) %>%
+      ungroup() %>%
+      select(id, years, event),
+    by = "id"
+  ) %>%
+  mutate(observed_event = if_else(years <= 5 & event == 1, 1L, 0L)) %>%
+  filter(!is.na(pred_risk))
+
+cat("Rows in calibration data:", nrow(calib_df), "\n")
+
+calib_df <- calib_df %>%
+  mutate(risk_decile = ntile(pred_risk, 10))
+
+calib_summary <- calib_df %>%
+  group_by(risk_decile) %>%
+  summarise(
+    mean_predicted = mean(pred_risk,      na.rm = TRUE),
+    mean_observed  = mean(observed_event, na.rm = TRUE),
+    n              = n(),
+    .groups        = "drop"
+  )
+
+print(calib_summary)
+
+ggplot(calib_summary, aes(x = mean_predicted, y = mean_observed)) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey50", linewidth = 0.8) +
+  geom_line(colour = "#2166AC", linewidth = 0.9) +
+  geom_point(aes(size = n), colour = "#2166AC", alpha = 0.8) +
+  scale_size_continuous(range = c(2, 6), name = "Subjects per decile") +
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     labels = scales::percent_format(accuracy = 1)) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title    = "Calibration curve — joint model",
+    subtitle = "Horizon: 5 years | Decile grouping",
+    x        = "Mean predicted risk",
+    y        = "Observed event proportion"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position  = "bottom",
+    panel.grid.minor = element_blank()
+  )
+
+ggplot(brier_df, aes(x = landmark, y = brier)) +
+  geom_line(colour = "#4DAC26", linewidth = 1) +
+  geom_point(colour = "#4DAC26", size = 3) +
+  scale_y_continuous(limits = c(0, 0.3), breaks = seq(0, 0.3, 0.05)) +
+  labs(
+    title    = "Brier score over landmark times — joint model",
+    subtitle = "Prediction horizon: 5 years",
+    x        = "Landmark time (years)",
+    y        = "Brier score"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+# Calibration Summary Table:
+
+110 patients were split into 10 equal groups based on their predicted risk, from lowest to highest. Looking at the numbers, the model's predicted risks stay very low for most groups — barely above 0% for the first few deciles, only reaching 56.9% for the highest-risk group. Yet when we look at what actually happened to these patients, even those in the lowest-risk group had a 36.4% event rate, and the second group had 81.8%. This gap between what the model predicted and what actually occurred tells us straight away that the model is underestimating how many patients will experience the event.
+
+# Calibration Curve
+
+Nearly all points cluster in the bottom-left corner — predicted risks are very low (under 10%) while observed event rates reach 40–100%, indicating the model systematically underestimates risk. The filtering process only kept patients who stopped attending follow-up before year 5, and the patients most likely to do that are the ones who were already very unwell — those who died or received a transplant early on. Healthier patients who kept attending their appointments year after year were largely removed by this filter. So the group we ended up calibrating on was unintentionally skewed towards sicker patients, which pushed the observed event rates up artificially and made the model appear less accurate than it really is. The discrimination results (AUC = 0.77) therefore give a more reliable picture of the model's practical usefulness than the calibration curve alone.
+
+# Brier Score Plot
+
+The scores sit between 0.16 and 0.21 across all landmark times, which is a reasonable range. The model performs best at landmark year 1 (score ≈ 0.16), meaning predictions made early in follow-up tend to be most accurate. There is a small dip in performance at year 2, but from year 3 onwards the scores level off around 0.18–0.19 and stay there. The important takeaway is that all scores remain comfortably below 0.25 throughout, meaning the model consistently adds predictive value above pure chance regardless of when predictions are made.

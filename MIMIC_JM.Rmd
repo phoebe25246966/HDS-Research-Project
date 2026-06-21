@@ -22,163 +22,687 @@ When you click the **Knit** button a document will be generated that includes bo
 
 #library
 ```{r}
-library(GLMMadaptive)
+library(knitr)
+library(splines)
+library(patchwork)
+library(kableExtra)
+library(table1)
+library(rticles)
 library(dplyr)
+library(broom)
+library(broom.mixed)
+library(gtsummary)
 library(ggplot2)
+library(survival)
+library(survminer)
 library(nlme)
-library(ordinal)
+library(performance)
+library(modelsummary)
+library(JMbayes2)
 ```
 
-# Explore MIMIC dataset
-
+## MIMIC dataset - subset
 
 ```{r}
-lab_events<- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/labevents.csv")
-lab_items<- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/d_labitems.csv")
-patients <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/patients.csv")
-icu_stays <- read.csv("mimic-iv-clinical-database-demo-2.2/icu/icustays.csv")
-prescriptions <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/prescriptions.csv")
+lab_events<- read.csv("labevents.csv")
+lab_items<- read.csv("d_labitems.csv")
+patients <- read.csv("patients.csv")
+icu_stays <- read.csv("icustays.csv")
+prescriptions <- read.csv("prescriptions.csv")
 
 biomarkers <- left_join(lab_events,lab_items,by="itemid")
 
-d_items <- read.csv("mimic-iv-clinical-database-demo-2.2/icu/d_items.csv")
-date_time_event <- read.csv("mimic-iv-clinical-database-demo-2.2/icu/datetimeevents.csv")
+d_items <- read.csv("d_items.csv")
+date_time_event <- read.csv("datetimeevents.csv")
 
-admission <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/admissions.csv")
+admission <- read.csv("admissions.csv")
 
-diagnoses_icd <- read.csv("mimic-iv-clinical-database-demo-2.2/hosp/diagnoses_icd.csv")
+diagnoses_icd <- read.csv("diagnoses_icd.csv")
 
 
-biomarkers <- left_join(lab_events,lab_items,by="itemid")
-icu_patient <- left_join(icu_stays,patients,by="subject_id")
-admission_patient <- left_join(admission,patients,by="subject_id")
-date_time_item <- left_join(date_time_event,d_items,by="itemid")
 
-potassium_df <- biomarkers %>%
-  filter(label=="Potassium")%>%
+
+potassium_df <- lab_events %>%
+  left_join(lab_items, by = "itemid") %>%
+  filter(label == "Potassium") %>%
   mutate(
-    storetime = strptime(storetime, "%Y-%m-%d %H:%M:%S"),
-    charttime = strptime(charttime, "%Y-%m-%d %H:%M:%S")
-  )%>% 
-  arrange(subject_id,storetime)%>%
-  group_by(subject_id)%>%
-  mutate(
-  event_num =  seq_along(storetime))
-
-
-#check the death and non-death
-icu_patient <- icu_patient%>%
- arrange(subject_id)%>%
- distinct(subject_id,.keep_all = TRUE)%>%
- mutate(
-  dod = ifelse(dod=="",NA,dod))
-
-#check the death of individuals death before and after discharge from ICU 
-icu_patient_df <-icu_patient%>%
-mutate(
-  outtime = strptime(outtime, "%Y-%m-%d %H:%M:%S"),
-  dod = strptime(dod, "%Y-%m-%d"),
-  death_before = ifelse(dod<outtime,1,0))
-
-# Keep only patients death_before discharge and alive 
-icu_patient_df <- icu_patient_df%>%
-  filter(is.na(death_before)|death_before==1)
-
-# join with the biomarker sub df
-biomarkersP_icu <- left_join(icu_patient_df,potassium_df,by=c("subject_id","hadm_id"))
-
-# calculate the time collection of biomarkers
-biomarkersP_icu <- biomarkersP_icu%>%
+    charttime = as.POSIXct(charttime),
+    storetime = as.POSIXct(storetime)
+  ) %>%
+  group_by(subject_id, charttime) %>%
+  summarise(
+    valuenum = mean(valuenum, na.rm = TRUE),
+    storetime = max(storetime, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(subject_id, charttime) %>%
   group_by(subject_id) %>%
   mutate(
-  time_c = as.numeric(difftime(charttime, min(charttime), units = "days"))
-  )%>%
+    event_num = row_number(),
+    time_c = as.numeric(difftime(charttime, min(charttime), units = "week"))
+  ) %>%
   ungroup()
 
+# knowing that each patient might have duplicates admission so considering their first and last discharge time and compute Time_alive 
+admission_patient <-  admission %>%
+  left_join(patients, by = "subject_id") %>%
+  mutate(
+    admittime  = as.POSIXct(admittime, format = "%Y-%m-%d %H:%M:%S"),
+    dischtime  = as.POSIXct(dischtime, format = "%Y-%m-%d %H:%M:%S"),
+    deathtime  = na_if(deathtime, ""),   # convert empty string → NA
+  )%>%group_by(subject_id) %>%
+  summarise(
+    first_admit = min(admittime, na.rm = TRUE),
+    last_discharge = max(dischtime, na.rm = TRUE),
+    last_death = max(deathtime, na.rm = TRUE),
+    .groups = "drop"
+  )
 
-# filter baseline diseases
-diagnoses_icd <- diagnoses_icd %>%
-  arrange(subject_id,seq_num)
-
-# check for chronic kidney disease 
-# 5859		Chronic kidney disease, unspecified
-# 5851		Chronic kidney disease, Stage I
-# 5852		Chronic kidney disease, Stage II (mild)
-# 5853		Chronic kidney disease, Stage III (moderate)
-# 5854		Chronic kidney disease, Stage IV (severe)
-# 5855		Chronic kidney disease, Stage V
-
-icd_chronic_kidney <- diagnoses_icd%>%
-  filter(icd_code %in% c("5859","5851","5852","5853","5854","5855")) %>%
-  filter(subject_id %in% biomarkersP_icu$subject_id) %>%
-  distinct(subject_id,icd_code) 
+admission_patient <- admission_patient %>%
+  mutate(
+    Time_alive = as.numeric(difftime(last_discharge, first_admit, units = "week")),
+    last_death  = as.POSIXct(last_death, format = "%Y-%m-%d %H:%M:%S"),
+    death_event = case_when(
+      !is.na(last_death) & last_death <= last_discharge ~ 1,
+      is.na(last_death) ~ 0,
+      TRUE ~ 0
+    )
+  )
   
-# add in covariate chronic_kidney_disease
-biomarkersP_icu <- biomarkersP_icu%>%
-  mutate(
-    chronic_kidney_disease = if_else(
-      subject_id %in% icd_chronic_kidney$subject_id,
-      1, 0
-    )
-  )
 
-# add in covariate hypertension
-icd_hypertension <- diagnoses_icd%>%
-  filter(icd_code =="I10")%>%
-  filter(subject_id %in% biomarkersP_icu$subject_id)%>%
+pot_adm <- potassium_df %>%
+  left_join(admission_patient, by = "subject_id") 
+
+ckd_ids <- diagnoses_icd %>%
+  filter(icd_code %in% c("5859","5851","5852","5853","5854","5855")) %>%
   distinct(subject_id)
 
-# add in covariate hypertension
-biomarkersP_icu <- biomarkersP_icu%>%
-  mutate(
-    hypertension = if_else(
-      subject_id %in% icd_hypertension$subject_id,
-      1, 0
-    )
-  )
-
-# add in covariate drug heparin
-prec_heparin <- prescriptions%>%
-  filter(drug=="Heparin")%>%
-  filter(subject_id %in% biomarkersP_icu$subject_id)%>%
+htn_ids <- diagnoses_icd %>%
+  filter(icd_code == "I10") %>%
   distinct(subject_id)
 
-# new code : 
-# calculate time of alive using discharge time - admittime from admission table 
-admission_patient <- admission_patient%>%
-  mutate(
-    subject_id = as.character(subject_id),
-    Time_alive =  as.numeric(difftime(dischtime, admittime, units = "days"))
-  )
+hep_ids <- prescriptions %>%
+  filter(drug == "Heparin") %>%
+  distinct(subject_id)
 
-biomarkersP_icu <- biomarkersP_icu%>%
+biomarkersP_icu <- pot_adm %>%
   mutate(
-    drug_heparin = if_else(
-      subject_id %in% prec_heparin$subject_id,
-      1, 0
-    )
+    chronic_kidney_disease = if_else(subject_id %in% ckd_ids$subject_id, 1, 0),
+    hypertension = if_else(subject_id %in% htn_ids$subject_id, 1, 0),
+    drug_heparin = if_else(subject_id %in% hep_ids$subject_id, 1, 0)
   )
 
 biomarkersP_icu_clean <- biomarkersP_icu%>%
-  mutate(
-    subject_id= as.character(subject_id),
-    death_event = ifelse(is.na(death_before),0,1),
-  )%>%
-  dplyr::select(subject_id,gender,anchor_age,valuenum,time_c,storetime,hypertension,chronic_kidney_disease,drug_heparin,death_event)
-
-#left join
-biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
   left_join(
-    admission_patient %>% 
-      dplyr::select(subject_id, Time_alive),
+    patients %>%
+      select(subject_id, gender, anchor_age),
     by = "subject_id"
   )
 
-biomarkersP_icu_clean <- na.omit(biomarkersP_icu_clean)
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  select(
+    subject_id,
+    gender, anchor_age,
+    valuenum, time_c,
+    hypertension, chronic_kidney_disease,
+    drug_heparin,
+    death_event,Time_alive
+  ) %>% na.omit(biomarkersP_icu_clean)
 ```
+
+
 
 ```{r}
 table1(~time_c+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin|death_event,data=biomarkersP_icu_clean,caption="Baseline characteristic of MIMIC-IV dataset(subset) by death status")
+```
+\FloatBarrier
+
+
+Based on Table 26, it shows that subset of MIMIC dataset contains a total of 3015 observations of potassium counts from 100 individuals, with varying follow-up periods from baseline up to the 488 weeks. The dataset includes several covariates: gender,age, hypertension,chronic kidney disease and drug heparin. 
+
+\FloatBarrier
+
+```{r fig.cap="Potassium count trajectories over time",out.width = "65%"}
+biomarkersP_icu_clean <- biomarkersP_icu_clean%>%
+  mutate(log_value=log(valuenum))
+
+mimic_long <- ggplot(data=biomarkersP_icu_clean,
+       aes(x=time_c,y=log_value,group=subject_id))+geom_line()+
+       stat_smooth(aes(group=1), se=TRUE, method="loess",linewidth = 1)+theme_bw()+
+  labs(
+    x="Time (week)",
+    y ="log(potassium)",
+    title="Biomarkers-Potassium count on each individual over days"
+    )
+
+mimic_long
+```
+
+Based on Figure 15,the spaghetti plot shows substantial variability between patients. The LOESS smooth indicates a slightly decreasing trend in potassium count across the cohort, suggesting that potassium counts decline gradually over time. Fewer trajectories are observed around 200 week, suggesting possible loss to follow-up.
+
+
+
+```{r fig.pos="H",fig.cap="Kaplan Meier Survival Curve on baseline potassium tertiles",out.width="65%"}
+biomarkersP_surv <- biomarkersP_icu_clean%>%
+  distinct(subject_id,Time_alive,death_event)
+
+biomarkersP_base <- biomarkersP_icu_clean %>%
+  group_by(subject_id) %>%
+  arrange(Time_alive, .by_group = TRUE) %>%
+  dplyr::slice(1) %>%                     # baseline record per subject
+  ungroup() %>%
+  mutate(
+    p_grp = ntile(valuenum, 2),
+    p_grp = factor(p_grp, labels = c("Low","High"))
+  )
+
+biomarkersP_cov <- biomarkersP_icu_clean%>%
+  group_by(subject_id) %>%
+  dplyr::slice(1) %>%                     # baseline covariates per subject
+  ungroup() %>%
+  select(subject_id, gender,anchor_age, hypertension, chronic_kidney_disease,drug_heparin)
+
+km_biomarkersP_df <- biomarkersP_surv%>%
+  left_join(biomarkersP_base%>%select(subject_id,p_grp),by="subject_id")%>%
+  left_join(biomarkersP_cov,by="subject_id")%>%
+  filter(!is.na(p_grp))
+
+# KM by Baseline Potassium
+fit_km_potassium <- survfit(Surv(Time_alive,death_event)~p_grp,data=km_biomarkersP_df)
+ggsurvplot(
+  fit_km_potassium,data=km_biomarkersP_df,risk.table = TRUE,
+  risk.table.height = 0.30,  
+  risk.table.fontsize = 4,
+  ggtheme=theme_minimal(),
+  legend.title="Baseline Potassium Level"
+)
+```
+
+Figure 16 demonstrates the Kaplan Meier Survival Curve on baseline potassium tertiles.
+
+### Cox Proportional Hazard model
+
+```{r}
+# Chronic Kidney Disease
+cox_ckd <- coxph(
+  Surv(Time_alive, death_event) ~ chronic_kidney_disease,
+  data = km_biomarkersP_df
+)
+#summary(cox_ckd)
+```
+
+```{r echo=FALSE}
+# Age
+cox_age <- coxph(
+  Surv(Time_alive, death_event) ~ anchor_age,
+  data = km_biomarkersP_df
+)
+#summary(cox_age)
+```
+
+```{r echo=FALSE}
+# Gender
+cox_gender <- coxph(
+  Surv(Time_alive, death_event) ~ gender,
+  data = km_biomarkersP_df
+)
+#summary(cox_gender)
+```
+
+
+```{r echo=FALSE}
+# Hypertension
+cox_htn <- coxph(Surv(Time_alive, death_event) ~ hypertension, data = km_biomarkersP_df)
+#summary(cox_htn)
+
+```
+
+```{r}
+# Heparin
+cox_heparin <- coxph(Surv(Time_alive, death_event) ~ drug_heparin, data = km_biomarkersP_df)
+#summary(cox_heparin)
+
+model.coxph.mimic <-c("cox_ckd", "cox_age", "cox_gender", "cox_htn", "cox_heparin")
+aic.cox <- c(AIC(cox_ckd, cox_age, cox_gender, cox_htn, cox_heparin)$AIC)
+bic.cox <- c(BIC(cox_ckd, cox_age, cox_gender, cox_htn, cox_heparin)$BIC)
+log_Likelihood.cox <-c(as.numeric(logLik(cox_ckd)),as.numeric(logLik(cox_age)),as.numeric(logLik(cox_gender)),as.numeric(logLik(cox_htn)),as.numeric(logLik(cox_heparin)))
+
+result_c_coxmimic <- data.frame(
+  model.coxph.mimic,
+  AIC = aic.cox,
+  BIC = bic.cox,
+  logLik = log_Likelihood.cox
+)
+knitr::kable(result_c_coxmimic, caption = "Comparison of cox ph model on single covariate", digits = 3)
+
+```
+
+Table 27 shows that cox_gender has the lowest AIC, BIC and highest log likelihood score.
+
+```{r}
+cox_icu_full <- coxph(
+  Surv(Time_alive, death_event) ~ chronic_kidney_disease + anchor_age + gender +
+    hypertension + drug_heparin,
+  data = km_biomarkersP_df,
+  x = TRUE, y = TRUE
+)
+
+#summary(cox_icu_full)
+
+cox_icu_full_int <- coxph(
+  Surv(Time_alive, death_event) ~ gender*chronic_kidney_disease + anchor_age +
+    hypertension + drug_heparin,
+  data = km_biomarkersP_df,
+  x = TRUE, y = TRUE
+)
+
+#summary(cox_icu_full_int)
+#anova(cox_icu_full,cox_icu_full_int)
+res_cox <- anova(cox_icu_full, cox_icu_full_int)
+
+res_cox_df <- as.data.frame(res_cox)
+
+res_cox_df$`Pr(>|Chi|)` <- ifelse(
+  res_cox_df$`Pr(>|Chi|)` < 0.001,
+  "<0.001",
+  sprintf("%.4f", res_cox_df$`Pr(>|Chi|)`)
+)
+
+rownames(res_cox_df) <- c("Model 1 (main effects)", "Model 2 (with interaction)")
+
+knitr::kable(
+  res_cox_df,
+  caption = "ANOVA Comparison of Cox Models with and without Gender × CKD Interaction",
+  digits = 3
+)
+
+
+```
+Table 28 shows the likelihood ratio test comparing the two models gives χ² = 0.323 on 1 df (p = 0.5701), indicating that adding the gender × chronic kidney disease interaction does not significantly improve model fit. Since the simpler main-effects model fits essentially as well as the interaction model, there's no evidence that the effect of gender on survival differs by CKD status (or vice versa), so the main-effects model is preferred for parsimony.
+
+### Linear Mixed Effect model
+
+```{r}
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  dplyr::mutate(
+    gender = factor(gender),
+    hypertension = factor(hypertension),
+    chronic_kidney_disease = factor(chronic_kidney_disease),
+    drug_heparin = factor(drug_heparin),
+    subject_id = factor(subject_id)
+  )
+
+lme.mimic.full<- nlme::lme(
+  fixed=log_value~time_c+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full)
+
+lme.mimic.full_quad<- nlme::lme(
+  fixed=log_value~time_c+I(time_c^2)+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full_quad)
+
+lme.mimic.full_cub<- nlme::lme(
+  fixed=log_value~time_c+I(time_c^2)+I(time_c^3)+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin,
+  random = ~time_c|subject_id,
+  data=biomarkersP_icu_clean,
+  method = "REML"
+)
+#summary(lme.mimic.full_cub)
+
+
+lme.mimic.full_ml <- update(lme.mimic.full, method = "ML")
+lme.mimic.full_quad_ml <- update(lme.mimic.full_quad, method = "ML")
+lme.mimic.full_cub_ml <- update(lme.mimic.full_cub, method = "ML")
+
+res <- anova(
+  lme.mimic.full_ml,
+  lme.mimic.full_quad_ml,
+  lme.mimic.full_cub_ml
+)
+
+
+res_df <- as.data.frame(res)
+
+res_df$`p-value` <- ifelse(
+  res_df$`p-value` < 0.001,
+  "<0.001",
+  sprintf("%.4f", res_df$`p-value`)
+)
+res_df <- res_df %>% select(-call)
+rownames(res_df) <- c("Linear", "Quadratic", "Cubic")
+
+knitr::kable(res_df, caption = "ANOVA Comparison non linear trajectories of the biomarkers",digits = 3) 
+  
+
+```
+
+Based on Table 29, the sequential likelihood ratio tests compared consecutive nested models. The results show that adding a quadratic term in time does not significantly improve the model fit compared to the linear specification (p = 0.3327). However, extending the model from quadratic to cubic form leads to a statistically significant improvement in fit (p = 0.0019).
+
+Overall, these findings suggest that the relationship between biomarker levels and time is not adequately captured by a purely linear trend. While the quadratic term alone is not supported, the significant improvement with the cubic model indicates the presence of more complex (non-linear) temporal dynamics. Therefore, the cubic model provides the best representation among the three candidate specifications.
+
+## Joint model - JMbayes2 Package
+```{r}
+
+# scale the biomarkers for better conversion in MIMIC 
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  mutate(log_value_sc = as.numeric(scale(log_value)))
+
+# use spline in modelling non linear trajectories
+lme.mimic.full_spline <- nlme::lme(
+  fixed = log_value_sc ~ ns(time_c, df = 3) +
+    gender + anchor_age +
+    hypertension + chronic_kidney_disease + drug_heparin,
+    random = ~ time_c | subject_id, 
+  data = biomarkersP_icu_clean,
+  method = "REML"
+)
+
+jointFit_MIMIC1 <- JMbayes2::jm(
+  Mixed_objects = list(lme.mimic.full_spline),               
+  Surv_object = cox_icu_full,
+  time_var = "time_c",                          
+  id_var = "subject_id",
+  n_iter = 30000,
+  n_burnin = 5000
+)
+
+```
+
+```{r}
+sumJM_MIMIC_full1 <- summary(jointFit_MIMIC1)$Outcome1
+
+sumJM_MIMIC_full1 |>
+  as.data.frame() |>
+transform(
+  `P` = {
+    pvals <- as.numeric(as.character(`P`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  knitr::kable(
+    caption = "Summary of joint models on MIMIC dataset with full covariates(longitudinal)",
+    booktabs = TRUE,
+    digits = 3
+  )
+```
+
+In Table 30 shows the summary of joint models with full covariates on longitudinal part. Male gender showed a borderline association with the longitudinal biomarker trajectory (p = 0.096), suggesting a potential effect but not reaching conventional statistical significance.. It also suggests that estimate value of sigma (within patient variability) is 0.871, and the credible interval between 0.849 and 0.894, suggesting high within-subject variability in the longitudinal biomarker measurements after accounting for fixed and random effects.
+
+
+
+```{r}
+sumJM_MIMIC_full1_surv <- summary(jointFit_MIMIC1)$Survival
+
+sumJM_MIMIC_full1_surv |>
+  as.data.frame() |>
+transform(
+  `P` = {
+    pvals <- as.numeric(as.character(`P`))
+    ifelse(pvals < 0.001, "< 0.001", sprintf("%.3f", pvals))
+  }
+)|>
+  knitr::kable(
+    caption = "Summary of joint models on MIMIC dataset with full covariates(survival)",
+    booktabs = TRUE,
+    digits = 3
+  )
+```
+In Table 31 shows the summary of joint models with full covariates on survival part. The covariate of gender and drug heparin covariate are associated with survival outcome, as 95% credible interval of these covariates do not include 0. It also suggests that estimate value of value(log_value_sc) (association parameter) is 2.223 and the credible interval between 0.570 and 4.078, suggesting one standard deviation increase in the biomarker level is associated with an approximately 9.235-fold(exp(2.223)) increase in the hazard of death.
+
+```{r fig.pos="H",fig.cap="Traceplot of association parameter", out.width="60%"}
+ggtraceplot(jointFit_MIMIC1,"alphas")
+```
+
+Figure 15 presents the traceplot of the association parameter. The chains exhibit stable mixing and no apparent trends, indicating reasonable convergence of the MCMC algorithm.
+
+\FloatBarrier
+
+
+
+### Dynamic prediction
+
+```{r,out.width="70%",fig.cap="Dynamic Survival Predictions in Full Joint Model"}
+set.seed(123)
+
+biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(!is.na(subject_id)) %>%
+  dplyr::mutate(subject_id = as.character(subject_id))
+
+# filter those with 2 obs and above
+valid_ids <- biomarkersP_icu_clean %>%
+  count(subject_id) %>%
+  filter(n >= 2) %>%
+  pull(subject_id)
+
+newdata_clean <- biomarkersP_icu_clean %>%
+  filter(subject_id %in% valid_ids)
+
+plots <- list()
+plot_index <- 1   
+
+for (id_i in valid_ids) {
+
+  newdata_long <- newdata_clean %>%
+    dplyr::filter(subject_id == id_i) %>%
+    dplyr::arrange(time_c) %>%
+    tidyr::drop_na(time_c, hypertension, chronic_kidney_disease,drug_heparin, gender, anchor_age)
+
+
+    if (nrow(newdata_long) < 2) next
+
+  t_star <- max(newdata_long$time_c)
+
+
+  newdata_surv <- newdata_long %>%
+    dplyr::slice(1) %>%          
+    dplyr::mutate(Time_alive = t_star, event = 0)
+
+  predict_MIMIC_jm <- tryCatch(
+    predict(
+      jointFit_MIMIC1,
+      newdata = list(newdataL = newdata_long,
+                     newdataE = newdata_surv),
+      process = "event",
+      return_newdata = TRUE,
+      times = seq(t_star, t_star + 5, by = 0.25)
+    ),
+    error = function(e) NULL
+  )
+
+  # Skip subjects where prediction fails
+  if (is.null(predict_MIMIC_jm) || nrow(predict_MIMIC_jm) == 0) next
+
+  
+  g_long <- ggplot(newdata_long,
+                   aes(x = time_c, y = log_value)) +
+    geom_point(colour = "darkred") +
+    geom_line(colour = "darkred") +
+    geom_vline(xintercept = t_star, linetype = "dashed") +
+    labs(title = paste("Subject", id_i),
+         y = "log biomarker") +
+    theme_minimal()
+
+g_surv <- ggplot(predict_MIMIC_jm,
+                 aes(x = time_c, y = 1 - pred_CIF)) +
+  geom_ribbon(aes(ymin = 1 - upp_CIF, ymax = 1 - low_CIF),
+              fill = "steelblue", alpha = 0.3) +
+  geom_line(colour = "steelblue") +
+  geom_vline(xintercept = t_star, linetype = "dashed") +
+  labs(x = "Time (years)", y = "Survival Probability") +
+  theme_minimal()
+
+  plots[[plot_index]] <- g_long / g_surv
+  plot_index <- plot_index + 1
+}
+
+wrap_plots(plots[1:6], ncol = 3)
+
+```
+\FloatBarrier
+Figure 16 displays the subject-specific dynamic survival predictions from the full joint model for subjects 10001217, 10001725, 10002428, 10002495, 10003046 and 10000032 over a 5-weeks prediction horizon from the landmark time. In general, the predicted survival probabilities for most subjects remain above 0.9 throughout the prediction window.
+
+\FloatBarrier
+
+```{r fig.pos='H',fig.cap="ROC curve — joint full model (MIMIC-IV)",out.width="70%"}
+roc_res <- tvROC(
+  jointFit_MIMIC1,
+  newdata = newdata_clean,
+  Tstart  = 1,
+  Dt      = 30
+)
+
+sensitivity <- roc_res$TP / (roc_res$TP + roc_res$nFN)
+specificity <- roc_res$nTN / (roc_res$nTN + roc_res$FP)
+
+roc_df_MIMIC <- data.frame(
+  FPR = 1 - specificity,
+  TPR = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  
+  arrange(FPR)
+
+auc0 <- tvAUC(
+  jointFit_MIMIC1,
+  newdata = newdata_clean,
+  Tstart = 1,
+  Dt = 30
+)$auc
+
+p_roc <- ggplot(roc_df_MIMIC, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc0, 3)),
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    subtitle = "Landmark: 0 years | Horizon: 30 weeks",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+p_roc
+```
+\FloatBarrier
+Figure 17 presents the time-dependent ROC curve for the joint model with full covariates, evaluated at 30 weeks prediction horizon. The model performance is assessed at a landmark time of 1 time unit, yielding an AUC of 0.894 This indicates that the model has good discriminative ability in distinguishing between patients who experience the event within the specified time window and those who do not. An AUC of 0.894 suggesting reasonable predictive performance of the joint model. Further improvement in predictive accuracy may be achieved by incorporating the full MIMIC-IV dataset, which would increase sample size and improve data balance across time points.
+
+\FloatBarrier
+```{r fig.cap="Calibration Curve for Full Joint Model in MIMIC-IV data"}
+
+landmark_times = c(0,15,30,40)
+
+newdata_clean <- newdata_clean %>%
+  group_by(subject_id) %>%
+  arrange(time_c, .by_group = TRUE) %>%
+  ungroup()
+
+newdata_clean <- newdata_clean %>%
+  distinct(subject_id, time_c, .keep_all = TRUE)
+
+tvBrier_result_full <- lapply(landmark_times, function(t0) {
+  tvBrier(
+    jointFit_MIMIC1,
+    newdata = newdata_clean,
+    Tstart = t0,
+    Dt = 5
+  )
+
+})
+
+extract_brier <- function(res, t0) {
+
+  data.frame(
+    landmark = t0,
+    horizon = res$Thoriz,
+    brier = res$Brier
+  )
+}
+
+tvBrier_full_df <- lapply(seq_along(landmark_times), function(i) {
+
+  extract_brier(
+    tvBrier_result_full[[i]],
+    landmark_times[i]
+  )
+
+}) %>% dplyr::bind_rows()
+
+knitr::kable(tvBrier_full_df, caption = "Time Dependent Brier Score for Full Joint Model",digits=3)
+
+grid <- seq(
+  0,
+  ceiling(max(biomarkersP_icu_clean$Time_alive, na.rm = TRUE)),
+  by = 5
+)
+
+event_table <-  biomarkersP_icu_clean %>%
+     group_by(subject_id) %>%
+     summarise(
+         Time_alive = first(Time_alive),
+         event = max(death_event),
+         .groups = "drop"
+     ) %>%
+     mutate(interval = cut(Time_alive, breaks = grid <- grid, right = FALSE)) %>%
+     group_by(interval) %>%
+     summarise(
+         n_events = sum(event),
+         n_total  = n(),
+         event_rate = n_events / n_total
+     )
+
+knitr::kable(event_table, caption = "Distribution of death events in 5-unit time intervals(weeks)",digits=3)
+```
+
+The landmark times for the time-dependent Brier score are selected in a data-driven manner based on the distribution of observed event times within the study period. Table 32 presents the Brier score of the full joint model at different prediction horizons following selected landmark times. The Brier score remains lowest at prediction horizon of 15 to 20 weeks (0.027). A slightly increase in the Brier score is observed at the 30-35 weeks horizon, followed by a similar value of 0.033 at 40-45 weeks. This pattern may reflect increasing uncertainty in survival prediction as the time horizon extends.However, these differences should be interpreted with caution due to the relatively small number of individuals and uneven event distribution in the later intervals (as shown in Table 28).
+
+
+
+```{r}
+png("calibration_plot.png", width = 1400, height = 900, res = 150)
+
+calibration_plot(
+  jointFit_MIMIC1,
+  newdata = newdata_clean,
+  Tstart = 0,
+  Dt = 20
+)
+dev.off()
+```
+
+```{r fig.cap="Calibration plot for full joint model",out.width="70%"}
+knitr::include_graphics("calibration_plot.png")
+```
+
+\FloatBarrier
+
+The calibration curve compares the predicted survival probabilities with the observed survival proportions at specified landmark times and a prediction horizon of 20 weeks. As shown in Figure 18, the model is not well calibrated, as the red curve closely follows the diagonal reference line. However, the red curve lies below the diagonal for most of the range, which means the model is overestimating survival.
+
+
+
+```{r}
+library(table1)
+table1(~time_c+gender+anchor_age+hypertension+chronic_kidney_disease+drug_heparin|death_event,data=biomarkersP_icu_clean,caption="Baseline characteristic of MIMIC-IV dataset(subset) by death status")
+```
+
+```{r}
+ggplot(data=biomarkersP_icu_clean,aes(x=factor(chronic_kidney_disease),fill=gender))+
+  geom_bar()
+
+ggplot(data=biomarkersP_icu_clean,aes(x=factor(hypertension),fill=gender))+
+  geom_bar()
 ```
 
 
@@ -186,8 +710,10 @@ table1(~time_c+gender+anchor_age+hypertension+chronic_kidney_disease+drug_hepari
 ## Longitudinal biomarkers over time
 
 ```{r}
+biomarkersP_icu <- biomarkersP_icu %>%
+  mutate(log_value = log(valuenum))
 ggplot(data=biomarkersP_icu,
-       aes(x=time_c,y=valuenum,group=subject_id))+
+       aes(x=time_c,y=log_value,group=subject_id))+
   geom_line()+
   stat_smooth(aes(group=1), se=TRUE, method="loess",linewidth = 1)+
   theme_bw()+
@@ -205,7 +731,7 @@ selected_ids <- c("10001217", "10002495", "10003400")  # change as needed
 plot_data <- biomarkersP_icu_clean %>%
   filter(subject_id %in% selected_ids)
 
-ggplot(plot_data, aes(x = time_c, y = log_value_sc, color = subject_id)) +
+ggplot(plot_data, aes(x = time_c, y = log_value, color = subject_id)) +
   geom_line() +
   geom_point() +
   labs(
@@ -410,6 +936,14 @@ cox_icu_full <- coxph(
 #summary(cox_icu_full)
 ```
 
+```{r}
+cox_icu_full_interaction <- coxph(
+  Surv(Time_alive, death_event) ~ chronic_kidney_disease + anchor_age + gender +
+    hypertension + drug_heparin,
+  data = km_biomarkersP_df,
+  x = TRUE, y = TRUE
+)
+```
 
 ```{r echo=FALSE}
 library(performance)
@@ -471,8 +1005,7 @@ biomarkersP_icu_clean <- biomarkersP_icu_clean %>%
     hypertension = factor(hypertension),
     chronic_kidney_disease = factor(chronic_kidney_disease),
     drug_heparin = factor(drug_heparin),
-    subject_id = factor(subject_id),
-    log_value = log(valuenum)
+    subject_id = factor(subject_id)
   )
 
 lme.mimic.full<- nlme::lme(

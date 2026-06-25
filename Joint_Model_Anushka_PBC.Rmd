@@ -1,0 +1,1031 @@
+---
+title: "Joint models anushka"
+author: "Anushka Muley"
+date: "2025-11-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+suppressPackageStartupMessages({library(ggplot2)
+library(MASS)
+library(gtsummary)
+library(dplyr)
+library(survival)
+library(survminer)
+library(knitr)
+library(sjPlot)
+library(JMbayes2)
+library(splines)})
+```
+
+
+## Load package
+
+
+```{r}
+# PBC data (JMbayes2)
+data("pbc2", package = "JMbayes2")
+data("pbc2.id", package = "JMbayes2")
+
+pbc <- pbc2 %>%
+  mutate(id = as.integer(id),
+         histologic = factor(histologic),
+         sex = factor(sex, labels = c("Female", "Male")),
+         hepatomegaly = factor(hepatomegaly),
+         ascites = factor(ascites),
+         drug = factor(drug)) %>%
+  arrange(id, year)
+
+# survival frame with explicit {0,1} event indicator
+pbc_surv <- pbc2.id %>%
+  mutate(
+    id = as.integer(id),
+    event = as.integer(status2 != 0),
+    sex = factor(sex) 
+  )
+```
+#Descriptive Statistics
+
+```{r}
+library(dplyr)
+
+pbc %>%
+  summarise(
+    n = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    median_bili = median(serBilir, na.rm = TRUE),
+    min_bili = min(serBilir, na.rm = TRUE),
+    max_bili = max(serBilir, na.rm = TRUE)
+  )
+
+```
+
+The dataset comprises 1,945 longitudinal observations from 312 patients with Primary Biliary Cirrhosis (PBC). The mean age at baseline was 49.3 years (SD = 10.1), reflecting a predominantly middle-aged cohort. The median serum bilirubin was 1.4 mg/dL, with substantial right-skew (range: 0.1–41.0 mg/dL), indicating considerable heterogeneity in disease severity across patients.
+
+# Summary Table
+
+```{r}
+library(table1)
+library(dplyr)
+
+data("pbc2", package = "JMbayes2")
+data("pbc2.id", package = "JMbayes2")
+pbc <- pbc2 %>%
+  mutate(
+    id = as.integer(id),
+    histologic = factor(histologic),
+    sex = factor(sex, labels = c("Female", "Male")),
+    hepatomegaly = factor(hepatomegaly),
+    ascites = factor(ascites),
+    drug = factor(drug)
+  ) %>%
+  arrange(id, year)
+
+table1(
+  ~ age + status + sex + serBilir + albumin + drug + year + ascites + edema | status,
+  data = pbc, caption= "Baseline characteristic of PBC dataset by status"
+)
+```
+
+The PBC dataset comrises 1,945 longitudinal observations from 312 patients with Primary Biliary Cirrhosis (PBC). The mean age at baseline was 49.3 years (SD = 10.1), reflecting a predominantly middle-aged cohort. The median serum bilirubin was 1.4 mg/dL, with substantial right-skew (range: 0.1–41.0 mg/dL), indicating considerable heterogeneity in disease severity across patients.
+
+#Longitudinal Spagetti
+
+```{r}
+p_pbc_long <- ggplot(pbc, aes(x = year, y = log(serBilir), group = id)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = 1), method = "loess", se = TRUE, linewidth = 1) +
+  labs(title = "PBC: log(serum bilirubin) trajectories",
+       x = "Years since baseline", y = "log(serum bilirubin)")
+p_pbc_long
+
+```
+
+The spaghetti plot reveals substantial between-patient heterogeneity in serum bilirubin trajectories over time. While many patients maintain relatively stable bilirubin levels, a subset exhibit steep upward trajectories, reflecting rapid disease progression. The LOESS smoother shows an overall increasing trend in log(serum bilirubin) across the cohort, confirming progressive liver dysfunction over the study period.
+
+# Plot for visualisation
+
+```{r}
+ggplot(pbc, aes(year, log(serBilir), group = id)) +
+  geom_line(alpha = 0.15) +
+  facet_wrap(~ sex) +
+  labs(title = "Log(bilirubin) trajectories by sex",
+       x = "Years", y = "log(bilirubin)")
+
+```
+```{r}
+ggplot(pbc, aes(year, log(serBilir), group = id)) +
+  geom_line(alpha = 0.15) +
+  facet_wrap(~ drug) +
+  labs(title = "Log(bilirubin) trajectories by drug",
+       x = "Years", y = "log(bilirubin)")
+
+```
+
+The faceted plots show broadly similar bilirubin trajectories between male and female patients and between the placebo and D-penicillamine groups, with no visually obvious separation in the population-level trends. This is consistent with the non-significant findings for both sex and drug in the subsequent mixed model analyses.
+
+# Kaplan–Meier by baseline bilirubin (tertiles)
+```{r, fig.width=8,fig.height=8}
+pbc_surv <- pbc2.id %>%
+  mutate(id = as.integer(id),
+         event = as.integer(status2 != 0))
+
+pbc_base <- pbc %>%
+  group_by(id) %>%
+  arrange(year, .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(bili_grp = ntile(serBilir, 3),
+         bili_grp = factor(bili_grp, labels = c("Low","Medium","High")))
+
+km_df <- pbc_surv %>%
+  left_join(pbc_base %>% select(id, bili_grp), by = "id") %>%
+  filter(!is.na(bili_grp))
+
+fit_km_pbc <- survfit(Surv(years, event) ~ bili_grp, data = km_df)
+
+ggsurvplot(
+  fit_km_pbc, data = km_df, risk.table = TRUE,
+  title = "PBC: Survival by baseline serum bilirubin tertiles",
+  legend.title = "Baseline ser. bilirubin"
+)
+
+```
+
+The Kaplan–Meier curves demonstrate a clear and statistically meaningful separation in survival probability across baseline serum bilirubin tertiles. Patients in the high tertile experience substantially worse survival, with the curves diverging early and widening throughout follow-up. This confirms that baseline bilirubin is a strong prognostic marker for mortality or transplantation in PBC, and provides early justification for its inclusion as the longitudinal biomarker in the joint model.
+
+# Linear Mixed Effect Model
+
+```{r}
+library(nlme)
+
+model_year <- nlme::lme(
+  log(serBilir) ~ year,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+
+model_sex <- nlme::lme(
+  log(serBilir) ~ year + sex,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_year)
+
+summary(model_sex)
+
+```
+model_year: βyear = 0.177, e0.177 = 1.19. We can conclude that bilirubin increases by 19% on average. Therefore, Strong evidence of disease progression over year.
+model_sex : p value is 0.2778, which is greater than 0.05. Therefore sex is not a significant predictor.
+
+```{r}
+model_age <- nlme::lme(
+  log(serBilir) ~ year + age,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_age)
+
+```
+model_age : p value is 0.9342, which is greater than 0.05. Therefore age is not a significant predictor.
+```{r}
+
+
+model_drug <- nlme::lme(
+  log(serBilir) ~ year + drug,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_drug)
+
+```
+model_drug : p value is 0.255, which is greater than 0.05. Therefore drugD-penicil is not a significant predictor.
+
+```{r}
+model_ascites <- nlme::lme(
+  log(serBilir) ~ year + ascites,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_ascites)
+```
+model_ascites : p value is 0, which is lesser than 0.05. Therefore ascites is a significant predictor.
+
+```{r}
+model_hepatomegaly <- nlme::lme(
+  log(serBilir) ~ year + hepatomegaly,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_hepatomegaly)
+
+```
+model_hepatomegaly : p value is 0.0019, which is lesser than 0.05. Therefore hepatomegaly is a significant predictor.
+
+
+```{r}
+model_edema <- nlme::lme(
+  log(serBilir) ~ year + edema,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+summary(model_edema)
+```
+model_edema : p value is 0, which is lesser than 0.05. Therefore edema is a significant predictor.
+
+```{r}
+model_histologic <- nlme::lme(
+  log(serBilir) ~ year + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim")
+)
+
+summary(model_histologic)
+
+```
+
+model_histologic : p value is greater than 0.05 is most histologic stages therefore it is not a significant.
+
+To find the best model:
+```{r}
+AIC(model_year, model_age, model_sex, model_ascites, model_drug, model_edema, model_hepatomegaly, model_histologic)
+BIC(model_year, model_age, model_sex, model_ascites, model_drug, model_edema, model_hepatomegaly, model_histologic)
+```
+According to AIC and BIC scores, model_ascites is the preferred model.
+
+# Full LME Model
+
+```{r}
+model_full <- nlme::lme(
+  log(serBilir) ~ year + sex + age + drug + ascites + hepatomegaly + edema + histologic,
+  random = ~ year | id,
+  data = pbc,                
+  na.action = na.omit,
+  control = nlme::lmeControl(opt = "optim"))
+
+summary(model_full)
+```
+
+In the full lme model, year, ascites, hepatomegaly, edema and histologic stage 4 are found to be significant. 
+
+# Check for Multicollinearity:
+```{r}
+library(performance)
+check_collinearity(model_full)
+```
+
+No Multicollinearity has been found in the model.
+
+# Cox Proportional Hazards Model
+```{r}
+# Age
+cox_age <- coxph(Surv(years, event) ~ age, data = pbc_surv, x = TRUE, y = TRUE)
+summary(cox_age)
+
+# Sex
+pbc_surv_sex <- pbc_surv %>%
+  mutate(sex = factor(sex, labels = c("Female", "Male")))
+
+cox_sex <- coxph(Surv(years, event) ~ sex, data = pbc_surv_sex, x = TRUE, y = TRUE)
+summary(cox_sex)
+
+# Drug
+pbc_surv_drug <- pbc_surv %>%
+  mutate(drug = factor(drug))
+
+cox_drug <- coxph(Surv(years, event) ~ drug, data = pbc_surv_drug, x = TRUE, y = TRUE)
+summary(cox_drug)
+
+# Ascites
+pbc_surv_ascites <- pbc_surv %>%
+  mutate(ascites = factor(ascites))
+
+cox_ascites <- coxph(Surv(years, event) ~ ascites, data = pbc_surv_ascites, x = TRUE, y = TRUE)
+summary(cox_ascites)
+
+# Hepatomegaly
+pbc_surv_hep <- pbc_surv %>%
+  mutate(hepatomegaly = factor(hepatomegaly))
+
+cox_hep <- coxph(Surv(years, event) ~ hepatomegaly, data = pbc_surv_hep, x = TRUE, y = TRUE)
+summary(cox_hep)
+
+# Edema
+pbc_surv_edema <- pbc_surv %>%
+  mutate(edema = factor(edema))
+
+cox_edema <- coxph(Surv(years, event) ~ edema, data = pbc_surv_edema, x = TRUE, y = TRUE)
+summary(cox_edema)
+
+# Histologic
+pbc_surv_hist <- pbc_surv %>%
+  mutate(histologic = factor(histologic))
+
+cox_hist <- coxph(Surv(years, event) ~ histologic, data = pbc_surv_hist, x = TRUE, y = TRUE)
+summary(cox_hist)
+
+```
+Age:
+Each 1-year increase in age is associated with a 4.5% higher hazard of death.
+p < 0.001, strong evidence that age is a risk factor.
+
+Sex:
+Being male reduces the hazard by 48% compared to females.
+p is 0.0029, This is less than 0.05, so sex is a statistically significant predictor of survival.
+
+Drug:
+Hazard ratio ≈ 1.0 → no effect on survival.
+p = 0.992, not significant.
+
+Ascites:
+Having ascites increases hazard by 7.6 times.
+p < 2e-16, highly significant.
+Hepatomegaly:
+Having hepatomegaly increases hazard by 3.06 times.
+p = 9.46e-10, highly significant.
+
+Edema:
+Edema (no diuretics) increases hazard by 1.63 times.
+Edema (despite diuretics) increases hazard by 10.9 times.
+p = 0.033 (no diuretics), p < 2e-16 (despite diuretics), which is significant.
+
+Histologic stage (vs stage 1):
+Stage 2 : hazard 6.39 times, p = 0.070, not significant
+Stage 3 : hazard 9.67 times, p = 0.025,significant
+Stage 4 : hazard 24.04 times, p = 0.0016, significant
+
+# Best Univariate Model
+```{r}
+AIC(cox_age, cox_sex, cox_drug, cox_ascites, cox_hep, cox_edema, cox_hist)
+BIC(cox_age, cox_sex, cox_drug, cox_ascites, cox_hep, cox_edema, cox_hist)
+```
+
+According to AIC and BIC scores, cox_edema is the best model, which is therefore the parsimonious model.
+
+# Full Model
+```{r}
+pbc_surv <- pbc_surv %>%
+  mutate(
+    sex = factor(sex, labels = c("Female", "Male")),
+    drug = factor(drug),
+    ascites = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema = factor(edema),
+    histologic = factor(histologic)  
+  )
+
+cox_pbc_full <- coxph(
+  Surv(years, event) ~ age + sex + drug +
+    ascites + hepatomegaly + edema +
+    histologic,
+  data = pbc_surv,
+  x = TRUE, y = TRUE
+)
+
+summary(cox_pbc_full)
+
+```
+
+After adjusting for all variables simultaneously, several predictors remained significant. Age continued to show a modest but significant increase in risk (HR = 1.032, p < 0.001). Ascites (HR = 2.201, p = 0.011), hepatomegaly (HR = 1.792, p = 0.005), severe edema (HR = 4.949, p < 0.001), and histologic stage 4 (HR = 9.087, p = 0.032) were also independently associated with higher mortality. However, sex, drug treatment, and mild edema were no longer statistically significant once the other clinical variables were included, suggesting that their earlier effects may have been explained by confounding with measures of disease severity. The concordance statistic for the model was 0.774, indicating good ability to distinguish between patients with higher and lower survival risk.
+
+```{r}
+ph_test <- cox.zph(cox_pbc_full)
+print(ph_test)
+plot(ph_test)
+```
+The Schoenfeld residuals test indicated no evidence of violations of the proportional hazards assumption for any individual variable (all p > 0.05). The global test was also non-significant (χ² = 14.76, p = 0.141), confirming that the assumption underlying the Cox model is satisfied.
+
+Check for Multicollinearity:
+```{r}
+check_collinearity(cox_pbc_full)
+```
+
+Variance inflation factor (VIF) values for all predictors were below 1.6, indicating that multicollinearity was not a concern in the model.
+
+
+
+
+#Joint Model
+Joint Model with full model.
+```{r}
+library(JMbayes2)
+jointFit_full <- jm(
+  Mixed_objects = list(model_full),
+  Surv_object = cox_pbc_full,
+  time_var = "year",
+  id_var = "id"
+)
+
+sumJM_full <- summary(jointFit_full)$Outcome1
+
+rownames(sumJM_full) <- c(
+  "(Intercept)",
+  "Year",
+  "Sex (Male)",
+  "Age",
+  "Drug (D-penicillamine)",
+  "Ascites (Yes)",
+  "Hepatomegaly (Yes)",
+  "Edema (No diuretics)",
+  "Edema (Despite diuretics)",
+  "Histologic Stage 2",
+  "Histologic Stage 3",
+  "Histologic Stage 4",
+  "Sigma"
+)
+
+
+sumJM_full |>
+  knitr::kable(
+    caption = "Summary of joint models with full models",
+    booktabs = TRUE,
+    digits = 3
+  )
+coef(jointFit_full)$association
+
+```
+the joint model links the longitudinal evolution of log(serum bilirubin) with survival through the posterior mean of the association parameter value of 1.320284  indicates a positive relationship between the longitudinal process and the hazard of the event.This parameter quantifies the effect of the underlying true biomarker value on the hazard of death. A one-unit increase in the biomarker corresponds to approximately a 3.7-fold increase in the hazard.
+This means that as liver function deteriorates over time (reflected by increasing bilirubin), the risk of death increases dynamically. Therefore, survival is not only influenced by baseline covariates but also by the patient’s evolving disease trajectory.
+
+Joint Model with parsimonious model.
+```{r}
+jointFit_pars <- jm(
+  Mixed_objects = list(model_ascites),               
+  Surv_object = cox_edema,                 
+  time_var = "year",                          
+  id_var = "id"
+)
+
+sumJM_pars <- summary(jointFit_pars)$Outcome1
+
+rownames(sumJM_pars) <- c(
+  "(Intercept)",
+  "Year",
+  "Ascites (Yes)",
+  "Sigma"
+)
+
+
+sumJM_pars |>
+  knitr::kable(
+    caption = "Summary of joint models with parsimonious models",
+    booktabs = TRUE,
+    digits = 3
+  )
+coef(jointFit_pars)$association
+```
+the joint model with a parsimonious linear mixed effects model and cox proportional hazards model. The posterior mean being 1.20 suggests a strong positive association, with approximately a 3.3-fold increase in hazard per unit increase in the longitudinal outcome.
+
+Comparing Joint Models:
+```{r}
+compare_jm_res <- compare_jm(
+  jointFit_full,
+  jointFit_pars
+)
+
+
+tab <- data.frame(
+  Model = c("Joint Parsimonious Model", "Joint Full Model"),
+  DIC = compare_jm_res$table$DIC,
+  WAIC = compare_jm_res$table$WAIC,
+  LPML = compare_jm_res$table$LPML
+)
+
+knitr::kable(
+  tab,
+  caption = "Comparison of Joint Models"
+)
+```
+
+we can conclude that Joint Parsimonious Model is the better model beacuse it has lower DIC and WAIC and higher LPML.
+
+# Dynamic Survival Prediction
+Parsimonious Model:
+```{r}
+library(patchwork)
+library(tidyr)
+set.seed(123)
+patients_selection <- pbc %>%
+  group_by(id) %>%
+  filter(n() >= 4) %>%
+  filter(all(complete.cases(ascites, hepatomegaly, edema, histologic))) %>%
+  ungroup()
+
+ids_pred <- sample(unique(patients_selection$id), size = 3)
+
+plots <- vector("list", length(ids_pred))
+
+for (i in seq_along(ids_pred)) {
+  id_i <- ids_pred[i]
+  
+  nd_long <- pbc %>%
+    filter(id == id_i) %>%
+    arrange(year) %>%
+    drop_na(ascites, hepatomegaly, edema, histologic)
+  
+  t_star <- max(nd_long$year, na.rm = TRUE)
+  
+  nd_surv <- pbc_surv %>%
+    filter(id == id_i) %>%
+    mutate(years = t_star, event = 0) %>%
+    drop_na(age, ascites, hepatomegaly, edema, histologic)
+  
+  dp <- predict(
+    jointFit_pars,
+    newdata = list(newdataL = nd_long, newdataE = nd_surv),
+    process = "event",
+    return_newdata = TRUE,
+    times = seq(t_star, t_star + 5, by = 0.25)
+  )
+  
+  time_col <- if ("times" %in% names(dp)) "times" else "year"
+  
+  g_long <- ggplot(nd_long, aes(x = year, y = log(serBilir))) +
+    geom_point(colour = "darkred", size = 2) +
+    geom_line(colour = "darkred", linewidth = 0.8) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    labs(
+      title = paste0("Subject ", id_i),
+      x     = NULL,
+      y     = "log(serBilir)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title       = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+  
+  g_surv <- ggplot(dp, aes(x = .data[[time_col]], y = 1 - pred_CIF)) +
+    geom_ribbon(aes(ymin = 1 - upp_CIF, ymax = 1 - low_CIF),
+                fill = "steelblue", alpha = 0.3) +
+    geom_line(colour = "steelblue", linewidth = 1) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    annotate("text", x = t_star, y = 0.05,
+             label  = paste0("t* = ", round(t_star, 2)),
+             hjust  = -0.1, size = 3.5, colour = "grey40") +
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+    labs(x = "Time (years)", y = "Survival Probability") +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+  
+  plots[[i]] <- g_long / g_surv + plot_layout(heights = c(1, 1.5))
+}
+
+wrap_plots(plots, ncol = 2) +
+  plot_annotation(
+    theme = theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5))
+  )
+```
+
+Figure displays subject-specific dynamic survival predictions from the parsimonious joint model for subject IDs 282, 29, and 309. Overall, survival probabilities remain high across the prediction horizon for all three subjects, suggesting a relatively low predicted risk of the event within the 5-year window. Subject 29, with the longest landmark time of approximately 11.86 years, maintains a near-constant survival probability, reflecting that patients who have survived this long tend to have a more stable prognosis. Subjects 282 and 309 similarly show high and stable survival curves, with only a marginal decline over time. The dashed vertical line marks the landmark time t* from which predictions are made conditionally on each subject's observed longitudinal history, and the shaded bands represent 95% credible intervals.
+
+Full Model:
+```{r}
+set.seed(123)
+patients_selection <- pbc %>%
+  group_by(id) %>%
+  filter(n() >= 4) %>%
+  filter(all(complete.cases(ascites, hepatomegaly, edema, histologic))) %>%
+  ungroup()
+
+ids_pred <- sample(unique(patients_selection$id), size = 3)
+
+plots <- vector("list", length(ids_pred))
+
+for (i in seq_along(ids_pred)) {
+  id_i <- ids_pred[i]
+  
+  nd_long <- pbc %>%
+    filter(id == id_i) %>%
+    arrange(year) %>%
+    drop_na(ascites, hepatomegaly, edema, histologic)
+  
+  t_star <- max(nd_long$year, na.rm = TRUE)
+  
+  nd_surv <- pbc_surv %>%
+    filter(id == id_i) %>%
+    mutate(years = t_star, event = 0) %>%
+    drop_na(age, ascites, hepatomegaly, edema, histologic)
+  
+  dp <- predict(
+    jointFit_full,
+    newdata = list(newdataL = nd_long, newdataE = nd_surv),
+    process = "event",
+    return_newdata = TRUE,
+    times = seq(t_star, t_star + 5, by = 0.25)
+  )
+  
+
+  time_col <- if ("times" %in% names(dp)) "times" else "year"
+  
+  
+  g_long <- ggplot(nd_long, aes(x = year, y = log(serBilir))) +
+    geom_point(colour = "darkred", size = 2) +
+    geom_line(colour = "darkred", linewidth = 0.8) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    labs(
+      title = paste0("Subject ", id_i),
+      x     = NULL,
+      y     = "log(serBilir)"
+    ) +
+    theme_minimal(base_size = 11) +
+    theme(
+      plot.title       = element_text(face = "bold"),
+      panel.grid.minor = element_blank()
+    )
+  
+  g_surv <- ggplot(dp, aes(x = .data[[time_col]], y = 1 - pred_CIF)) +
+    geom_ribbon(aes(ymin = 1 - upp_CIF, ymax = 1 - low_CIF),
+                fill = "steelblue", alpha = 0.3) +
+    geom_line(colour = "steelblue", linewidth = 1) +
+    geom_vline(xintercept = t_star, linetype = "dashed", colour = "grey40") +
+    annotate("text", x = t_star, y = 0.05,
+             label  = paste0("t* = ", round(t_star, 2)),
+             hjust  = -0.1, size = 3.5, colour = "grey40") +
+    scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+    labs(x = "Time (years)", y = "Survival Probability") +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank())
+  
+  plots[[i]] <- g_long / g_surv + plot_layout(heights = c(1, 1.5))
+}
+
+wrap_plots(plots, ncol = 2) +
+  plot_annotation(
+    theme = theme(plot.title = element_text(face = "bold", size = 13, hjust = 0.5))
+  )
+```
+
+Figure displays subject-specific dynamic survival predictions from the full joint model for subject IDs 282, 29, and 309. Overall, the pattern is very similar to the parsimonious model, with all three subjects maintaining high survival probabilities across the prediction horizon, suggesting a low predicted risk of the event. Subject 29, with the longest landmark time of approximately 11.86 years, shows a near-constant survival curve, consistent with long-term survivors having a more stable prognosis. Subjects 282 and 309 similarly exhibit high and relatively flat survival curves with only marginal decline over time. Comparing the two models, the full and parsimonious joint models produce largely consistent dynamic survival predictions for these three subjects, suggesting that the variable selection in the parsimonious model did not substantially alter individual-level predictions.
+
+# AUC and ROC curves
+Parsimonious Model:
+
+```{r}
+pbc_long_clean <- pbc %>%
+  drop_na(year, serBilir, ascites, hepatomegaly, edema, histologic)
+
+pbc_surv_clean <- pbc2.id %>%
+  mutate(
+    id           = as.integer(id),
+    event        = as.integer(status2 != 0),
+    sex          = factor(sex, labels = c("Female", "Male")),
+    drug         = factor(drug),
+    ascites      = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema        = factor(edema),
+    histologic   = factor(histologic)
+  ) %>%
+  drop_na(age, ascites, hepatomegaly, edema, histologic)
+
+common_ids     <- intersect(unique(pbc_long_clean$id), unique(pbc_surv_clean$id))
+pbc_long_clean <- pbc_long_clean %>% filter(id %in% common_ids)
+pbc_surv_clean <- pbc_surv_clean %>% filter(id %in% common_ids)
+
+pbc_tv <- pbc_long_clean %>%
+  dplyr::select(-any_of(c("years", "event", "status", "status2"))) %>%
+  dplyr::left_join(
+    pbc_surv_clean %>% dplyr::select(id, years, event),
+    by = "id"
+  )
+
+stopifnot(all(c("id", "year", "years", "event") %in% names(pbc_tv)))
+
+roc_res <- tvROC(
+  jointFit_pars,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1
+)
+
+sensitivity <- roc_res$nTP / (roc_res$nTP + roc_res$nFN)
+specificity <- roc_res$nTN / (roc_res$nTN + roc_res$nFP)
+
+landmark_times <- c(0, 1, 2, 3, 4, 5)
+auc_df <- data.frame(
+  landmark = landmark_times,
+  auc = NA_real_
+)
+
+for (i in seq_along(landmark_times)) {
+  tmp <- tvAUC(
+    jointFit_pars,
+    newdata = pbc_tv,
+    Tstart = landmark_times[i],
+    Dt = 1
+  )
+  auc_df$auc[i] <- as.numeric(tmp$auc)
+}
+
+roc_df <- data.frame(
+  FPR       = 1 - specificity,
+  TPR       = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  arrange(FPR, TPR)
+
+p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc_df$auc[auc_df$landmark == 0], 3)),
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    subtitle = "Landmark: 0 years | Horizon: 1 year",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+p_auc <- ggplot(auc_df, aes(x = landmark, y = auc)) +
+  geom_line(colour = "#2166AC", linewidth = 1) +
+  geom_point(colour = "#2166AC", size = 3) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(
+    title    = "Time-dependent AUC",
+    subtitle = "Prediction horizon: 1 year",
+    x        = "Landmark time (years)",
+    y        = "AUC"
+  ) +
+  theme_minimal(base_size = 13)
+
+(p_roc | p_auc) +
+  plot_annotation(
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0.5)
+    )
+  )
+```
+
+Figure presents the ROC curve and time-dependent AUC of the parsimonious joint model. The ROC curve at landmark time 0 yields an AUC of 0.906, indicating excellent discriminative ability. The time-dependent AUC remains consistently above 0.5 across all landmark times, though it shows a slight decline at later landmark times, suggesting the model maintains good but slightly decreasing discrimination over time.
+
+Full Model:
+```{r}
+pbc_long_clean <- pbc %>%
+  drop_na(year, serBilir, ascites, hepatomegaly, edema, histologic)
+
+pbc_surv_clean <- pbc2.id %>%
+  mutate(
+    id           = as.integer(id),
+    event        = as.integer(status2 != 0),
+    sex          = factor(sex, labels = c("Female", "Male")),
+    drug         = factor(drug),
+    ascites      = factor(ascites),
+    hepatomegaly = factor(hepatomegaly),
+    edema        = factor(edema),
+    histologic   = factor(histologic)
+  ) %>%
+  drop_na(age, ascites, hepatomegaly, edema, histologic)
+
+common_ids     <- intersect(unique(pbc_long_clean$id), unique(pbc_surv_clean$id))
+pbc_long_clean <- pbc_long_clean %>% filter(id %in% common_ids)
+pbc_surv_clean <- pbc_surv_clean %>% filter(id %in% common_ids)
+
+
+pbc_tv <- pbc_long_clean %>%
+  dplyr::select(-any_of(c("years", "event", "status", "status2"))) %>%
+  dplyr::left_join(
+    pbc_surv_clean %>% dplyr::select(id, years, event),
+    by = "id"
+  )
+
+
+stopifnot(all(c("id", "year", "years", "event") %in% names(pbc_tv)))
+
+roc_res <- tvROC(
+  jointFit_full,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  control = list(
+    cores = 1,
+    parallel = "no"
+  )
+)
+
+sensitivity <- roc_res$nTP / (roc_res$nTP + roc_res$nFN)
+specificity  <- roc_res$nTN / (roc_res$nTN + roc_res$nFP)
+
+landmark_times <- c(0, 1, 2, 3, 4, 5)
+auc_df <- data.frame(
+  landmark = landmark_times,
+  auc = NA_real_
+)
+
+for (i in seq_along(landmark_times)) {
+  tmp <- tvAUC(
+    jointFit_full,
+    newdata = pbc_tv,
+    Tstart = landmark_times[i],
+    Dt = 1,
+    control = list(
+    cores = 1,
+    parallel = "no"
+  )
+)
+  auc_df$auc[i] <- as.numeric(tmp$auc)
+}
+
+roc_df <- data.frame(
+  FPR       = 1 - specificity,
+  TPR       = sensitivity,
+  threshold = roc_res$thrs
+) %>%
+  arrange(FPR, TPR)
+
+
+p_roc <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(colour = "#D6604D", linewidth = 1) +
+  geom_abline(intercept = 0, slope = 1,
+              linetype = "dashed", colour = "grey60") +
+  annotate("text", x = 0.65, y = 0.15,
+           label = paste0("AUC = ", round(auc_df$auc[auc_df$landmark == 0], 3)),  # ← fixed
+           size = 4.5, colour = "#D6604D") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  labs(
+    title    = "ROC curve — joint model",
+    subtitle = "Landmark: 0 years | Horizon: 1 year",
+    x        = "1 − Specificity (FPR)",
+    y        = "Sensitivity (TPR)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(aspect.ratio = 1)
+
+p_auc <- ggplot(auc_df, aes(x = landmark, y = auc)) +
+  geom_line(colour = "#2166AC", linewidth = 1) +
+  geom_point(colour = "#2166AC", size = 3) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  labs(
+    title    = "Time-dependent AUC",
+    subtitle = "Prediction horizon: 1 year",
+    x        = "Landmark time (years)",
+    y        = "AUC"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+(p_roc | p_auc) +
+  plot_annotation(
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 13, hjust = 0.5)
+    )
+  )
+```
+
+Figure presents the ROC curve and time-dependent AUC of the full joint model. The ROC curve at landmark time 0 yields a marginally higher AUC of 0.92 compared to the parsimonious model. The time-dependent AUC similarly remains well above 0.5 across landmark times but shows a more pronounced decline at landmark times 4 and 5, suggesting some reduction in discriminative performance at longer follow-up times. Overall, both models demonstrate strong discrimination, with the full model showing a slight advantage at earlier landmark times.
+
+#Brier Score and Calibration Curve
+
+```{r}
+landmark_times <- c(0, 1, 2, 3, 4, 5)
+brier_pars <- data.frame(landmark = landmark_times, brier = NA_real_)
+brier_full <- data.frame(landmark = landmark_times, brier = NA_real_)
+
+for (i in seq_along(landmark_times)) {
+  tmp_pars <- tvBrier(
+    jointFit_pars,
+    newdata  = pbc_tv,
+    Tstart   = landmark_times[i],
+    Dt       = 1,
+    cores    = 1    
+  )
+  brier_pars$brier[i] <- as.numeric(tmp_pars$Brier)
+
+  tmp_full <- tvBrier(
+    jointFit_full,
+    newdata  = pbc_tv,
+    Tstart   = landmark_times[i],
+    Dt       = 1,
+    cores    = 1    
+  )
+  brier_full$brier[i] <- as.numeric(tmp_full$Brier)
+}
+
+brier_combined <- rbind(
+  data.frame(brier_pars, model = "Parsimonious"),
+  data.frame(brier_full, model = "Full")
+)
+
+brier_combined %>%
+  mutate(brier = round(brier, 4)) %>%
+  tidyr::pivot_wider(names_from = model, values_from = brier) %>%
+  kable(
+    caption   = "Time-dependent Brier Scores for Parsimonious and Full Joint Models (Prediction Horizon: 1 Year)",
+    col.names = c("Landmark Time (years)", "Full", "Parsimonious"),
+    align     = "c"
+  )
+```
+
+```{r}
+p_brier <- ggplot(brier_combined, aes(x = landmark, y = brier,
+                                       colour = model, shape = model)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = 0.25, linetype = "dashed", colour = "grey50") +
+  scale_colour_manual(values = c("Parsimonious" = "#2166AC", "Full" = "#D6604D")) +
+  scale_y_continuous(limits = c(0, 0.30), breaks = seq(0, 0.30, 0.05)) +
+  labs(
+    subtitle = "Prediction horizon: 1 year",
+    x        = "Landmark time (years)",
+    y        = "Brier Score",
+    colour   = "Model",
+    shape    = "Model"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+print(p_brier)
+```
+
+From the above table and figure, both the parsimonious and full joint models demonstrate good predictive accuracy, with Brier scores remaining well below the 0.25 no-information threshold across all landmark times. The parsimonious model yields slightly lower Brier scores at most landmark times, most notably at landmark time 2 (0.0862 vs 0.0556), suggesting marginally better overall predictive performance compared to the full model. Both models show a small peak in Brier score around landmark time 2–3, indicating slightly reduced predictive accuracy at mid-follow-up, before stabilising at later landmark times.
+
+```{r}
+par(
+  mfrow = c(1, 2),
+  oma   = c(0, 0, 3, 0),
+  mar   = c(2, 2, 2, 1)
+)
+calibration_plot(
+  jointFit_pars,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  cores   = 1,    
+  main    = "Parsimonious Model\nLM=0, H=1y",
+  cex.main = 0.6,
+  col     = "#2166AC",
+  col_CI  = "#BDD7E7"
+)
+calibration_plot(
+  jointFit_full,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  cores   = 1,    
+  main    = "Full Model\nLM=0, H=1y",
+  cex.main = 0.6,
+  col     = "#D6604D",
+  col_CI  = "#FCBBA1"
+)
+
+
+par(mfrow = c(1, 1))
+
+cal_metrics_pars <- calibration_metrics(
+  jointFit_pars,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  cores   = 1   
+)
+cal_metrics_full <- calibration_metrics(
+  jointFit_full,
+  newdata = pbc_tv,
+  Tstart  = 0,
+  Dt      = 1,
+  cores   = 1    
+)
+
+```
+
+Figure displays the calibration curves for both models at landmark time 0 with a 1-year prediction horizon. The parsimonious model shows better calibration, with the observed probabilities tracking closer to the diagonal reference line across the range of predicted probabilities. The full model shows a wider credible interval band and a more pronounced deviation from the diagonal, particularly at higher predicted probabilities, suggesting slight overestimation of event risk in that region.
+
+# Results of PBC
+
+In the joint model with full covariates, the association parameter was 1.320. This indicates that lower serum biliubin trajectories are associated with a lower hazard and improved survival. 
+A similar estimate (1.20) was obtained in the parsimonious model, confirming a consistent positive relationship between serum bilirubin and risk of death.
+The parsimonious model is preferred as it as it better captures the relationship between serum bilirubin levels and survival outcomes.
